@@ -1,22 +1,23 @@
 """
 A web spider for analysing GPS data accidentally committed to github
 
-USAGE:  python gps.py checkpoint dataset count [repo-url]
+USAGE:  python gps.py count [repo-url]
 """
 
 
 from os     import path
 from sys    import argv
 
+from sqlalchemy import create_engine
+
 import re
 
 
 # Argc & Argv
-CHECKPOINT  = 1
-COUNT       = 3
-GOOD_ARGVS  = (4, 5)
-URL         = 4
-USE_URL     = 5
+COUNT       = 1
+GOOD_ARGVS  = (2, 3)
+URL         = 2
+USE_URL     = 3
 
 # Exit codes
 BAD_ARGV    = 1
@@ -26,19 +27,6 @@ WRITE   = "w"
 
 # Regex
 GH_REG  = r"https://github\.com/[A-Za-z]+/([A-Za-z0-9]+(\.[A-Za-z0-9]+)+)"
-
-
-def unpack(argv):
-    files = tuple(argv[CHECKPOINT: COUNT])
-    for f in files:
-        # Touch some empty files to make rdds less annoying
-        if not path.exists(f):
-            fp = open(f, WRITE)
-            fp.close()
-    checkpoint, dataset = files
-    count = int(argv[COUNT])
-
-    return checkpoint, dataset, count
 
 
 def validate(argv):
@@ -61,8 +49,6 @@ def validate(argv):
 def main():
     if not validate(argv):
         exit(BAD_ARGV)
-
-    checkpoint, dataset, count = unpack(argv)
 
 
 if __name__ == "__main__":
