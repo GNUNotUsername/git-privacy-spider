@@ -8,7 +8,7 @@ USAGE:  sudo python gps.py count [repo-url]
 from os     import path
 from sys    import argv
 
-from sqlalchemy         import create_engine
+from sqlalchemy         import Column,          create_engine, ForeignKey, Integer, MetaData, String, Table
 from sqlalchemy_utils   import create_database, database_exists
 
 import re
@@ -21,7 +21,8 @@ URL         = 2
 USE_URL     = 3
 
 # Databases
-DB_ADDR = "mariadb://root@localhost:3306/gitprivacyspider"
+DB_ADDR     = "mariadb://root@localhost:3306/gitprivacyspider"
+LINK_LEN    = 255
 
 # Exit codes
 BAD_ARGV    = 1
@@ -35,8 +36,52 @@ GH_REG  = r"https://github\.com/[A-Za-z]+/([A-Za-z0-9]+(\.[A-Za-z0-9]+)+)"
 
 def connect_db():
     engine = create_engine(DB_ADDR)
+    md = MetaData()
     if not database_exists(engine.url):
         create_database(engine.url)
+        # Probably a better way of doing this
+        users = Table(
+            "users", md,
+            Column("id",    Integer, primary_key = True),
+            Column("user",  String(LINK_LEN))
+        )
+        repos = Table(
+            "repos", md,
+            Column("id",    Integer, primary_key = True),
+            Column("repo",  String(LINK_LEN))
+        )
+        user_queue = Table(
+            "user_queue", md,
+            Column("id",    Integer, primary_key = True),
+            Column("user",  Integer, ForeignKey("users.id"))
+        )
+        user_seen = Table(
+            "user_seen", md,
+            Column("id",    Integer, primary_key = True),
+            Column("user",  Integer, ForeignKey("users.id"))
+        )
+        repo_queue = Table(
+            "repo_queue", md,
+            Column("id",    Integer, primary_key = True),
+            Column("user",  Integer, ForeignKey("repos.id"))
+        )
+        repo_seen = Table(
+            "repo_seen", md,
+            Column("id",    Integer, primary_key = True),
+            Column("user",  Integer, ForeignKey("repos.id"))
+        )
+        hits = Table(
+            "hits", md,
+            Column("id",        Integer, primary_key = True),
+            Column("repo",      Integer, ForeignKey("repos.id")),
+            Column("committer", Integer, ForeignKey("users.id")),
+            Column("repo-path", String(LINK_LEN))
+        )
+        md.create_all(engine)
+    else:
+        md.reflect(bind = engine)
+
+    return engine, md
 
 
 def validate(argv):
@@ -60,7 +105,7 @@ def main():
     if not validate(argv):
         exit(BAD_ARGV)
 
-    connect_db()
+    dbe, md = connect_db()
 
 
 if __name__ == "__main__":
