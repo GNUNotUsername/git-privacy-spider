@@ -23,9 +23,14 @@ USE_URL     = 3
 # Databases
 DB_ADDR     = "mariadb://root@localhost:3306/gitprivacyspider"
 LINK_LEN    = 255
+GOOD_TABLES = {"repos", "users", "repo_seen", "user_seen", "repo_queue", "hits", "user_queue"}
+
+# Error Messages
+BAD_TABLES  = "Tables do not match required schema; please fix in MariaDB"
 
 # Exit codes
 BAD_ARGV    = 1
+BAD_TABS    = 2
 
 # IO
 WRITE   = "w"
@@ -80,6 +85,12 @@ def connect_db():
         md.create_all(engine)
     else:
         md.reflect(bind = engine)
+        tables = set(list(md.tables.keys()))
+        if tables != GOOD_TABLES:
+            print(BAD_TABLES)
+            exit(BAD_TABS)
+        # Else; we'll just trust each table has the right cols for now
+        # TODO make it idiot proof
 
     return engine, md
 
