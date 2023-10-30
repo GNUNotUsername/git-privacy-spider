@@ -8,6 +8,9 @@ USAGE:  sudo python gps.py count
 from os     import path
 from sys    import argv
 
+from selenium.webdriver import Chrome, ChromeOptions
+from webdriver_manager.chrome import ChromeDriverManager as CDM
+from selenium.webdriver.chrome.service import Service
 from sqlalchemy         import Column,          create_engine, ForeignKey, Integer, insert, MetaData, select, String, Table
 from sqlalchemy_utils   import create_database, database_exists
 
@@ -23,6 +26,9 @@ DB_ADDR     = "mariadb://root@localhost:3306/gitprivacyspider"
 LINK_LEN    = 255
 GOOD_TABLES = {"repo", "user", "repo_seen", "user_seen", "repo_queue", "hits", "user_queue"}
 REPO_ENT    = "repo"
+TOP         = 1
+QUEUE_TMPL  = "{0}_queue"
+USER_ENT    = "user"
 
 # Error Messages
 BAD_TABLES  = "Tables do not match required schema; please fix in MariaDB"
@@ -33,6 +39,14 @@ BAD_TABS    = 2
 
 # IO
 WRITE   = "w"
+
+# Scraping
+RANDOM_URL  = "https://gitrandom.digitalbunker.dev"
+#CO1         = "--disable-dev-shm-usage"
+#CO2         = "--remote-debugging-port=9222"
+CO3         = "--no-sandbox"
+CO4         = "--headless"
+CHROME_OPS  = [CO3, CO4]
 
 # URLs
 IGNORE_START    = 3
@@ -87,7 +101,6 @@ def connect_db():
         md.reflect(bind = engine)
         tables = set(list(md.tables.keys()))
         if tables != GOOD_TABLES:
-            print(tables)
             print(BAD_TABLES)
             exit(BAD_TABS)
         # Else; we'll just trust each table has the right cols for now
@@ -97,8 +110,25 @@ def connect_db():
     return engine, tables
 
 
+def pop_entity(engine, tables, tabkey):
+    return engine.execute(select(tables[tabkey]).limit(TOP)).fetchone()
+
+
+def pop_repo(engine, tables):
+    repo = pop_entity(engine, tables, REPO_ENT)
+    while repo is None:
+        user = pop_entity(engine, tables, USER_ENT)
+        if user is None:
+            scrape_random_repo(engine, tables)
+            continue
+        crawl_user_repos(engine, tables, user)
+        repo = pop_entity(engine, tables, REPO_ENT)
+
+    return repo
+
+
 def push_entity(engine, tables, tabkey, url):
-    base_ent, queue = tables[tabkey], tables[f"{tabkey}_queue"]
+    base_ent, queue = tables[tabkey], tables[QUEUE_TMPL.format(tabkey)]
     cut = URL_DELIM.join(url.split(URL_DELIM)[IGNORE_START:])
     query = select(base_ent).where(base_ent.c.name == cut)
     check = engine.execute(query).fetchone()
@@ -108,6 +138,16 @@ def push_entity(engine, tables, tabkey, url):
         fkey = engine.execute(query).fetchone().id
         link = {tabkey: fkey}
         engine.execute(insert(queue).values(link))
+
+
+def scrape_random_repo(engine, tables):
+    ops = ChromeOptions()
+    for a in CHROME_OPS:
+        ops.add_argument(a)
+
+    c = Chrome(service = Service(CDM().install()), options = ops)
+    c.get(RANDOM_URL)
+    input()
 
 
 def validate(argv):
@@ -129,6 +169,8 @@ def main():
     count = int(argv[COUNT])
     dbe, tables = connect_db()
 
+    for _ in range(count):
+        search = pop_repo(dbe, tables)
 
 if __name__ == "__main__":
     main()
