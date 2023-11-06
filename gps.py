@@ -13,7 +13,7 @@ from selenium.webdriver import Chrome, ChromeOptions
 from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager as CDM
 from selenium.webdriver.chrome.service import Service
-from sqlalchemy         import Column,          create_engine, ForeignKey, Integer, insert, MetaData, select, String, Table
+from sqlalchemy         import Column,          create_engine, delete, ForeignKey, Integer, insert, MetaData, select, String, Table
 from sqlalchemy_utils   import create_database, database_exists
 
 import re
@@ -27,9 +27,10 @@ GOOD_ARGC   = 2
 DB_ADDR     = "mariadb://root@localhost:3306/gitprivacyspider"
 LINK_LEN    = 255
 GOOD_TABLES = {"repo", "user", "repo_seen", "user_seen", "repo_queue", "hits", "user_queue"}
+NAME_IND    = 1
 REPO_ENT    = "repo"
 TOP         = 1
-QUEUE_TMPL  = "{0}_queue"
+QUEUE_EXT   = "_queue"
 USER_ENT    = "user"
 
 # Error Messages
@@ -111,7 +112,17 @@ def connect_db():
 
 
 def pop_entity(engine, tables, tabkey):
-    return engine.execute(select(tables[tabkey]).limit(TOP)).fetchone()
+    queue = tables[tabkey + QUEUE_EXT]
+    agg = tables[tabkey]
+    query = select(queue).limit(TOP)
+    out = engine.execute(query).fetchone()
+    if out is not None:
+        query = delete(queue).where(queue.c.id == out.id)
+        engine.execute(query)
+        query = select(agg).where(agg.c.id == out.id)
+        out = engine.execute(query).fetchone()[NAME_IND]
+
+    return (out)
 
 
 def pop_repo(engine, tables):
@@ -120,15 +131,15 @@ def pop_repo(engine, tables):
         user = pop_entity(engine, tables, USER_ENT)
         if user is None:
             scrape_random_repo(engine, tables)
-            continue
-        crawl_user_repos(engine, tables, user)
+        else:
+            crawl_user_repos(engine, tables, user)
         repo = pop_entity(engine, tables, REPO_ENT)
 
     return repo
 
 
 def push_entity(engine, tables, tabkey, url):
-    base_ent, queue = tables[tabkey], tables[QUEUE_TMPL.format(tabkey)]
+    base_ent, queue = tables[tabkey], tables[tabkey + QUEUE_EXT]
     cut = URL_DELIM.join(url.split(URL_DELIM)[IGNORE_START:])
     query = select(base_ent).where(base_ent.c.name == cut)
     check = engine.execute(query).fetchone()
