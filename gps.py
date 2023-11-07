@@ -26,14 +26,13 @@ GOOD_ARGC   = 2
 # Databases
 BASE_NAME   = "name"
 DB_ADDR     = "mariadb://root@localhost:3306/gitprivacyspider"
-GOOD_TABLES = {"repo", "user", "repo_seen", "user_seen", "repo_queue", "hits", "user_queue"}
+GOOD_TABLES = {"repo", "user", "repo_queue", "hits", "user_queue"}
 ID          = "id"
 IDEXT       = "." + ID
 LINK_LEN    = 255
 NAME_IND    = 1
 QUEUE_EXT   = "_queue"
 REPO_ENT    = "repo"
-SEEN_EXT    = "_seen"
 TOP         = 1
 USER_ENT    = "user"
 
@@ -99,18 +98,8 @@ def connect_db():
             Column(ID,          Integer, primary_key = True),
             Column(USER_ENT,    Integer, ForeignKey(USER_ENT + IDEXT))
         )
-        user_seen = Table(
-            USER_ENT + SEEN_EXT, md,
-            Column(ID,          Integer, primary_key = True),
-            Column(USER_ENT,    Integer, ForeignKey(USER_ENT + IDEXT))
-        )
         repo_queue = Table(
             REPO_ENT + QUEUE_EXT, md,
-            Column(ID,          Integer, primary_key = True),
-            Column(REPO_ENT,    Integer, ForeignKey(REPO_ENT + IDEXT))
-        )
-        repo_seen = Table(
-            REPO_ENT + SEEN_EXT, md,
             Column(ID,          Integer, primary_key = True),
             Column(REPO_ENT,    Integer, ForeignKey(REPO_ENT + IDEXT))
         )
