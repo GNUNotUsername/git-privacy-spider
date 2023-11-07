@@ -5,18 +5,18 @@ USAGE:  sudo python gps.py count
 """
 
 
-from os     import path
-from sys    import argv
+from json       import loads
+from os         import path
+from sys        import argv
+from requests   import get
 
-from selenium.common.exceptions import ElementNotInteractableException
-from selenium.webdriver import Chrome, ChromeOptions
-from selenium.webdriver.common.by import By
-from webdriver_manager.chrome import ChromeDriverManager as CDM
-from selenium.webdriver.chrome.service import Service
-from sqlalchemy         import Column,          create_engine, delete, ForeignKey, Integer, insert, MetaData, select, String, Table
-from sqlalchemy_utils   import create_database, database_exists
-
-import re
+from selenium.common.exceptions         import ElementNotInteractableException
+from selenium.webdriver                 import Chrome, ChromeOptions
+from selenium.webdriver.common.by       import By
+from webdriver_manager.chrome           import ChromeDriverManager as CDM
+from selenium.webdriver.chrome.service  import Service
+from sqlalchemy                         import Column,          create_engine, delete, ForeignKey, Integer, insert, MetaData, select, String, Table
+from sqlalchemy_utils                   import create_database, database_exists
 
 
 # Argc & Argv
@@ -24,13 +24,17 @@ COUNT       = 1
 GOOD_ARGC   = 2
 
 # Databases
+BASE_NAME   = "name"
 DB_ADDR     = "mariadb://root@localhost:3306/gitprivacyspider"
-LINK_LEN    = 255
 GOOD_TABLES = {"repo", "user", "repo_seen", "user_seen", "repo_queue", "hits", "user_queue"}
+ID          = "id"
+IDEXT       = "." + ID
+LINK_LEN    = 255
 NAME_IND    = 1
-REPO_ENT    = "repo"
-TOP         = 1
 QUEUE_EXT   = "_queue"
+REPO_ENT    = "repo"
+SEEN_EXT    = "_seen"
+TOP         = 1
 USER_ENT    = "user"
 
 # Error Messages
@@ -40,18 +44,38 @@ BAD_TABLES  = "Tables do not match required schema; please fix in MariaDB"
 BAD_ARGV    = 1
 BAD_TABS    = 2
 
+# Github API
+API_HEAD    = "https://api.github.com/"
+CONTRIBS    = (API_HEAD + "repos/{0}/contributors")
+UNAME       = "login"
+USER_REPOS  = (API_HEAD + "users/{0}/repos")
+
 # IO
-WRITE   = "w"
+WRITE       = "w"
 
 # Scraping
 RANDOM_URL  = "https://gitrandom.digitalbunker.dev"
 CHROME_OPS  = ["--no-sandbox", "--headless"]
+LINK_ATTR   = "href"
 NEXT_XPATH  = "/html/body/div[3]/div/div[1]/div[2]/form/div[2]/button"
 REPO_ID     = "currentRepoURL"
 
 # URLs
-IGNORE_START    = 3
-URL_DELIM       = "/"
+MIN_DELIMS  = 2
+NO_START    = 3
+URL_DELIM   = "/"
+
+
+URLSTRIP    = lambda u : URL_DELIM.join(u.split(URL_DELIM)[NO_START:])
+
+
+def add_contributors(engine, tables, repo):
+    url = CONTRIBS.format(repo)
+    req = get(url).text
+    js  = loads(req)
+    contribs = [u[UNAME] for u in js]
+    for user in contribs:
+        push_entity(engine, tables, USER_ENT, user)
 
 
 def connect_db():
@@ -61,41 +85,41 @@ def connect_db():
         create_database(engine.url)
         # Probably a better way of doing this
         users = Table(
-            "user", md,
-            Column("id",    Integer, primary_key = True),
-            Column("name",  String(LINK_LEN))
+            USER_ENT, md,
+            Column(ID,          Integer, primary_key = True),
+            Column(BASE_NAME,   String(LINK_LEN))
         )
         repos = Table(
-            "repo", md,
-            Column("id",    Integer, primary_key = True),
-            Column("name",  String(LINK_LEN))
+            REPO_ENT, md,
+            Column(ID,          Integer, primary_key = True),
+            Column(BASE_NAME,   String(LINK_LEN))
         )
         user_queue = Table(
-            "user_queue", md,
-            Column("id",    Integer, primary_key = True),
-            Column("user",  Integer, ForeignKey("user.id"))
+            USER_ENT + QUEUE_EXT, md,
+            Column(ID,          Integer, primary_key = True),
+            Column(USER_ENT,    Integer, ForeignKey(USER_ENT + IDEXT))
         )
         user_seen = Table(
-            "user_seen", md,
-            Column("id",    Integer, primary_key = True),
-            Column("user",  Integer, ForeignKey("user.id"))
+            USER_ENT + SEEN_EXT, md,
+            Column(ID,          Integer, primary_key = True),
+            Column(USER_ENT,    Integer, ForeignKey(USER_ENT + IDEXT))
         )
         repo_queue = Table(
-            "repo_queue", md,
-            Column("id",    Integer, primary_key = True),
-            Column("repo",  Integer, ForeignKey("repo.id"))
+            REPO_ENT + QUEUE_EXT, md,
+            Column(ID,          Integer, primary_key = True),
+            Column(REPO_ENT,    Integer, ForeignKey(REPO_ENT + IDEXT))
         )
         repo_seen = Table(
-            "repo_seen", md,
-            Column("id",    Integer, primary_key = True),
-            Column("repo",  Integer, ForeignKey("repo.id"))
+            REPO_ENT + SEEN_EXT, md,
+            Column(ID,          Integer, primary_key = True),
+            Column(REPO_ENT,    Integer, ForeignKey(REPO_ENT + IDEXT))
         )
         hits = Table(
             "hits", md,
-            Column("id",        Integer, primary_key = True),
-            Column("repo",      Integer, ForeignKey("repo.id")),
-            Column("committer", Integer, ForeignKey("user.id")),
-            Column("repo-path", String(LINK_LEN))
+            Column(ID,          Integer, primary_key = True),
+            Column(REPO_ENT,    Integer, ForeignKey(REPO_ENT + IDEXT)),
+            Column("committer", Integer, ForeignKey(USER_ENT + IDEXT)),
+            Column("path", String(LINK_LEN))
         )
         md.create_all(engine)
     else:
@@ -140,11 +164,11 @@ def pop_repo(engine, tables):
 
 def push_entity(engine, tables, tabkey, url):
     base_ent, queue = tables[tabkey], tables[tabkey + QUEUE_EXT]
-    cut = URL_DELIM.join(url.split(URL_DELIM)[IGNORE_START:])
+    cut = url if url.count(URL_DELIM) < MIN_DELIMS else URLSTRIP(url)
     query = select(base_ent).where(base_ent.c.name == cut)
     check = engine.execute(query).fetchone()
     if check is None:
-        entry = {"name": cut}
+        entry = {BASE_NAME: cut}
         engine.execute(insert(base_ent).values(entry))
         fkey = engine.execute(query).fetchone().id
         link = {tabkey: fkey}
@@ -161,7 +185,7 @@ def scrape_random_repo(engine, tables):
     c.find_element(By.XPATH, NEXT_XPATH).click()
     link = ""
     while len(link) == 0:
-        link = c.find_element(By.ID, REPO_ID).get_attribute("href")
+        link = c.find_element(By.ID, REPO_ID).get_attribute(LINK_ATTR)
     push_entity(engine, tables, REPO_ENT, link)
     c.quit()
 
@@ -187,7 +211,8 @@ def main():
 
     for _ in range(count):
         search = pop_repo(dbe, tables)
-        print(search)
+        add_contributors(dbe, tables, search)
+        input("look now")
 
 if __name__ == "__main__":
     main()
