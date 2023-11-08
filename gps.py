@@ -3,12 +3,14 @@ A web spider for analysing GPS data accidentally committed to github
 
 USAGE:  sudo python gps.py count
 """
+# TODO add csv write option
 
 
 from json       import loads
 from os         import mkdir, path
 from random     import choice
 from requests   import get
+from shutil     import rmtree
 from string     import ascii_letters as al
 from sys        import argv
 
@@ -212,6 +214,7 @@ tabkey  - the relevant table to push to
 url     - the (maybe shortened) URL of the entity to push
 """
 def push_entity(engine, tables, tabkey, url):
+    # TODO rethink if you can just pass the exact table now that those other are scrapped
     base_ent, queue = tables[tabkey], tables[tabkey + QUEUE_EXT]
     cut = url if url.count(URL_DELIM) < MIN_DELIMS else URLSTRIP(url)
     query = select(base_ent).where(base_ent.c.name == cut)
@@ -265,18 +268,32 @@ def validate(argv):
 
 
 def main():
+    # Validate argv
     if not validate(argv):
         exit(BAD_ARGV)
 
+    # Unpack argv and set up environment
     count = int(argv[COUNT])
     dbe, tables = connect_db()
     tempdir = make_temp_dir()
 
+    # Spider across all of github haphazardly
+    requeue = None
     for _ in range(count):
-        search = pop_repo(dbe, tables)
-        add_contributors(dbe, tables, search)
-        input("look")
+        try:
+            search = pop_repo(dbe, tables)
+            add_contributors(dbe, tables, search)
+            input("look")
+        except KeyboardInterrupt:
+            requeue = search
+            break
 
+    # Clean up anything left over
+    rmtree(tempdir)
+    if requeue is not None:
+        # Current repo is probably not fully analysed yet so re-push
+        # but we can't push_entity because the repo is already seen
+        engine.execute(insert(tables[REPO_ENT]).values({BASE_ENT: search}))
 
 if __name__ == "__main__":
     main()
