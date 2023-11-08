@@ -75,6 +75,13 @@ URL_DELIM   = "/"
 URLSTRIP    = lambda u : URL_DELIM.join(u.split(URL_DELIM)[NO_START:])
 
 
+"""
+Push unseen contributors for a repo into the user queue
+
+engine  - sqla db engine
+tables  - collection of sqla table objects
+repo    - url of the repo for which to enqueue the contributors of
+"""
 def add_contributors(engine, tables, repo):
     url = CONTRIBS.format(repo)
     req = get(url).text
@@ -84,6 +91,11 @@ def add_contributors(engine, tables, repo):
         push_entity(engine, tables, USER_ENT, user)
 
 
+"""
+Connect to an existing mariadb db if it exists or build a new one if not
+
+returns - the associated sqla db engine and collection of table objects
+"""
 def connect_db():
     engine = create_engine(DB_ADDR)
     md = MetaData()
@@ -131,6 +143,11 @@ def connect_db():
     return engine, tables
 
 
+"""
+Randomly generate a hidden directory to put repos in temporarily
+
+returns - the name of the directory
+"""
 def make_temp_dir():
     tempdir = ""
     while True:
@@ -142,6 +159,15 @@ def make_temp_dir():
     return tempdir
 
 
+"""
+Remove the first entity from a queue table
+
+engine  - sqla db engine
+tables  - collection of sqla table objects
+tabkey  - the relevant table to pop from
+
+return  - the string data of the popped entity (repo url / username)
+"""
 def pop_entity(engine, tables, tabkey):
     queue = tables[tabkey + QUEUE_EXT]
     agg = tables[tabkey]
@@ -156,6 +182,14 @@ def pop_entity(engine, tables, tabkey):
     return (out)
 
 
+"""
+Pop a repo from the repo queue and repopulate if necessary
+
+engine  - sqla db engine
+tables  - collection of sqla table objects
+
+returns - the shortened URL of the repo popped
+"""
 def pop_repo(engine, tables):
     repo = pop_entity(engine, tables, REPO_ENT)
     while repo is None:
@@ -169,6 +203,14 @@ def pop_repo(engine, tables):
     return repo
 
 
+"""
+Push a user or repo to its respective queue
+
+engine  - sqla db engine
+tables  - collection of sqla table objects
+tabkey  - the relevant table to push to
+url     - the (maybe shortened) URL of the entity to push
+"""
 def push_entity(engine, tables, tabkey, url):
     base_ent, queue = tables[tabkey], tables[tabkey + QUEUE_EXT]
     cut = url if url.count(URL_DELIM) < MIN_DELIMS else URLSTRIP(url)
@@ -182,6 +224,12 @@ def push_entity(engine, tables, tabkey, url):
         engine.execute(insert(queue).values(link))
 
 
+"""
+Add a random repo to the queue by scraping it from an online tool
+
+engine  - sqla db engine
+tables  - collection of sqla table objects
+"""
 def scrape_random_repo(engine, tables):
     ops = ChromeOptions()
     for a in CHROME_OPS:
@@ -197,6 +245,13 @@ def scrape_random_repo(engine, tables):
     c.quit()
 
 
+"""
+Ensure that the given arg vector is valid
+
+argv    - the arg vector to validate
+
+returns - true iff valid; else false
+"""
 def validate(argv):
     verdict = True
     argc = len(argv)
