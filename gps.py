@@ -4,6 +4,7 @@ A web spider for analysing GPS data accidentally committed to github
 USAGE:  sudo python gps.py count
 """
 # TODO add csv write option
+# TODO add multithreading support?
 
 
 from json       import loads
@@ -145,6 +146,11 @@ def connect_db():
     return engine, tables
 
 
+def crawl_user_repos(engine, tables, user):
+    # TODO actually implement
+    return
+
+
 """
 Randomly generate a hidden directory to put repos in temporarily
 
@@ -214,7 +220,7 @@ tabkey  - the relevant table to push to
 url     - the (maybe shortened) URL of the entity to push
 """
 def push_entity(engine, tables, tabkey, url):
-    # TODO rethink if you can just pass the exact table now that those other are scrapped
+    # TODO rethink -- pass the exact table now that others scrapped?
     base_ent, queue = tables[tabkey], tables[tabkey + QUEUE_EXT]
     cut = url if url.count(URL_DELIM) < MIN_DELIMS else URLSTRIP(url)
     query = select(base_ent).where(base_ent.c.name == cut)
@@ -280,6 +286,7 @@ def main():
     # Spider across all of github haphazardly
     requeue = None
     for _ in range(count):
+        search = None
         try:
             search = pop_repo(dbe, tables)
             add_contributors(dbe, tables, search)
@@ -293,7 +300,7 @@ def main():
     if requeue is not None:
         # Current repo is probably not fully analysed yet so re-push
         # but we can't push_entity because the repo is already seen
-        engine.execute(insert(tables[REPO_ENT]).values({BASE_ENT: search}))
+        dbe.execute(insert(tables[REPO_ENT]).values({BASE_NAME: search}))
 
 if __name__ == "__main__":
     main()
