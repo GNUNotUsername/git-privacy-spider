@@ -6,9 +6,12 @@ USAGE:  sudo python gps.py count
 
 
 from json       import loads
-from os         import path
-from sys        import argv
+from os         import mkdir, path
+from random     import choice
 from requests   import get
+from string     import ascii_letters as al
+from sys        import argv
+
 
 from selenium.common.exceptions         import ElementNotInteractableException
 from selenium.webdriver                 import Chrome, ChromeOptions
@@ -51,6 +54,10 @@ USER_REPOS  = (API_HEAD + "users/{0}/repos")
 
 # IO
 WRITE       = "w"
+
+# Pathing
+HIDE        = "."
+RAND_LEN    = 20
 
 # Scraping
 RANDOM_URL  = "https://gitrandom.digitalbunker.dev"
@@ -122,6 +129,17 @@ def connect_db():
     tables = md.tables
 
     return engine, tables
+
+
+def make_temp_dir():
+    tempdir = ""
+    while True:
+        tempdir = HIDE + "".join([choice(al) for _ in range(RAND_LEN)])
+        if not path.isdir(tempdir):
+            break
+    mkdir(tempdir)
+
+    return tempdir
 
 
 def pop_entity(engine, tables, tabkey):
@@ -197,11 +215,13 @@ def main():
 
     count = int(argv[COUNT])
     dbe, tables = connect_db()
+    tempdir = make_temp_dir()
 
     for _ in range(count):
         search = pop_repo(dbe, tables)
         add_contributors(dbe, tables, search)
-        input("look now")
+        input("look")
+
 
 if __name__ == "__main__":
     main()
