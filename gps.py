@@ -5,6 +5,7 @@ USAGE:  sudo python gps.py count
 """
 # TODO add csv write option
 # TODO add multithreading support?
+# TODO change to scoped sessions for threadsafety
 
 
 from json       import loads
@@ -52,6 +53,7 @@ BAD_TABS    = 2
 # Github API
 API_HEAD    = "https://api.github.com/"
 CONTRIBS    = (API_HEAD + "repos/{0}/contributors")
+REPNAME     = "full_name"
 UNAME       = "login"
 USER_REPOS  = (API_HEAD + "users/{0}/repos")
 
@@ -75,7 +77,8 @@ NO_START    = 3
 URL_DELIM   = "/"
 
 
-URLSTRIP    = lambda u : URL_DELIM.join(u.split(URL_DELIM)[NO_START:])
+URLSTRIP    = lambda u      : URL_DELIM.join(u.split(URL_DELIM)[NO_START:])
+REQ2JSON    = lambda f, u   : loads(get(f.format(u)).text)
 
 
 """
@@ -86,9 +89,7 @@ tables  - collection of sqla table objects
 repo    - url of the repo for which to enqueue the contributors of
 """
 def add_contributors(engine, tables, repo):
-    url = CONTRIBS.format(repo)
-    req = get(url).text
-    js  = loads(req)
+    js  = REQ2JSON(CONTRIBS, repo)
     contribs = [u[UNAME] for u in js]
     for user in contribs:
         push_entity(engine, tables, USER_ENT, user)
@@ -147,7 +148,12 @@ def connect_db():
 
 
 def crawl_user_repos(engine, tables, user):
-    # TODO actually implement
+    # TODO this could be combined with add_contributors realistically
+    js  = REQ2JSON(USER_REPOS, user)
+    repos = [r[REPNAME] for r in js]
+    for repo in repos:
+        push_entity(engine, tables, REPO_ENT, repo)
+
     return
 
 
@@ -199,12 +205,16 @@ tables  - collection of sqla table objects
 returns - the shortened URL of the repo popped
 """
 def pop_repo(engine, tables):
+    print("Popping repo")
     repo = pop_entity(engine, tables, REPO_ENT)
     while repo is None:
+        print("Popping user")
         user = pop_entity(engine, tables, USER_ENT)
         if user is None:
+            print("Scraping repo")
             scrape_random_repo(engine, tables)
         else:
+            print("Crawling user")
             crawl_user_repos(engine, tables, user)
         repo = pop_entity(engine, tables, REPO_ENT)
 
@@ -240,6 +250,7 @@ engine  - sqla db engine
 tables  - collection of sqla table objects
 """
 def scrape_random_repo(engine, tables):
+    # TODO scrap this lol use repositories?since=x instead
     ops = ChromeOptions()
     for a in CHROME_OPS:
         ops.add_argument(a)
@@ -290,7 +301,7 @@ def main():
         try:
             search = pop_repo(dbe, tables)
             add_contributors(dbe, tables, search)
-            input("look")
+            input("look\n")
         except KeyboardInterrupt:
             requeue = search
             break
