@@ -8,22 +8,16 @@ USAGE:  sudo python gps.py count
 # TODO change to scoped sessions for threadsafety
 
 
-from json       import loads
-from os         import mkdir, path
-from random     import choice
-from requests   import get
-from shutil     import rmtree
-from string     import ascii_letters as al
-from sys        import argv
+from json               import loads
+from os                 import mkdir,   path
+from random             import choice,  randint
+from requests           import get
+from shutil             import rmtree
+from string             import ascii_letters as al
+from sys                import argv
 
-
-from selenium.common.exceptions         import ElementNotInteractableException
-from selenium.webdriver                 import Chrome, ChromeOptions
-from selenium.webdriver.common.by       import By
-from webdriver_manager.chrome           import ChromeDriverManager as CDM
-from selenium.webdriver.chrome.service  import Service
-from sqlalchemy                         import Column,          create_engine, delete, ForeignKey, Integer, insert, MetaData, select, String, Table
-from sqlalchemy_utils                   import create_database, database_exists
+from sqlalchemy         import Column,          create_engine, delete, ForeignKey, Integer, insert, MetaData, select, String, Table
+from sqlalchemy_utils   import create_database, database_exists
 
 
 # Argc & Argv
@@ -53,8 +47,11 @@ BAD_TABS    = 2
 # Github API
 API_HEAD    = "https://api.github.com/"
 CONTRIBS    = (API_HEAD + "repos/{0}/contributors")
+RAND_MAX    = 255   # I have no idea what this number should be
+RAND_REPO   = (API_HEAD + "repositories?since={0}")
 REPNAME     = "full_name"
 UNAME       = "login"
+URL_ATTR    = "html_url"
 USER_REPOS  = (API_HEAD + "users/{0}/repos")
 
 # IO
@@ -63,13 +60,6 @@ WRITE       = "w"
 # Pathing
 HIDE        = "."
 RAND_LEN    = 20
-
-# Scraping
-RANDOM_URL  = "https://gitrandom.digitalbunker.dev"
-CHROME_OPS  = ["--no-sandbox", "--headless"]
-LINK_ATTR   = "href"
-NEXT_XPATH  = "/html/body/div[3]/div/div[1]/div[2]/form/div[2]/button"
-REPO_ID     = "currentRepoURL"
 
 # URLs
 MIN_DELIMS  = 2
@@ -158,6 +148,20 @@ def crawl_user_repos(engine, tables, user):
 
 
 """
+Add a random repo to the queue
+
+engine  - sqla db engine
+tables  - collection of sqla table objects
+"""
+def fetch_random_repo(engine, tables):
+    page = randint(0, RAND_MAX)
+    js = REQ2JSON(RAND_REPO, page)
+    select = choice(js)
+    repo = select[URL_ATTR]
+    push_entity(engine, tables, REPO_ENT, repo)
+
+
+"""
 Randomly generate a hidden directory to put repos in temporarily
 
 returns - the name of the directory
@@ -212,7 +216,7 @@ def pop_repo(engine, tables):
         user = pop_entity(engine, tables, USER_ENT)
         if user is None:
             print("Scraping repo")
-            scrape_random_repo(engine, tables)
+            fetch_random_repo(engine, tables)
         else:
             print("Crawling user")
             crawl_user_repos(engine, tables, user)
@@ -241,28 +245,6 @@ def push_entity(engine, tables, tabkey, url):
         fkey = engine.execute(query).fetchone().id
         link = {tabkey: fkey}
         engine.execute(insert(queue).values(link))
-
-
-"""
-Add a random repo to the queue by scraping it from an online tool
-
-engine  - sqla db engine
-tables  - collection of sqla table objects
-"""
-def scrape_random_repo(engine, tables):
-    # TODO scrap this lol use repositories?since=x instead
-    ops = ChromeOptions()
-    for a in CHROME_OPS:
-        ops.add_argument(a)
-
-    c = Chrome(service = Service(CDM().install()), options = ops)
-    c.get(RANDOM_URL)
-    c.find_element(By.XPATH, NEXT_XPATH).click()
-    link = ""
-    while len(link) == 0:
-        link = c.find_element(By.ID, REPO_ID).get_attribute(LINK_ATTR)
-    push_entity(engine, tables, REPO_ENT, link)
-    c.quit()
 
 
 """
