@@ -4,8 +4,7 @@ A web spider for analysing GPS data accidentally committed to github
 USAGE:  sudo python gps.py count
 """
 # TODO add csv write option
-# TODO add multithreading support?
-# TODO change to scoped sessions for threadsafety
+# TODO multithread this
 
 
 from json               import loads
@@ -17,6 +16,7 @@ from string             import ascii_letters as al
 from sys                import argv
 
 from sqlalchemy         import Column,          create_engine, delete, ForeignKey, Integer, insert, MetaData, select, String, Table
+from sqlalchemy.orm     import scoped_session,  sessionmaker
 from sqlalchemy_utils   import create_database, database_exists
 
 
@@ -133,16 +133,17 @@ def connect_db():
         # Else; we'll just trust each table has the right cols for now
         # TODO make it idiot proof later
     tables = md.tables
+    session = scoped_session(sessionmaker(bind = engine))
 
-    return engine, tables
+    return session, tables
 
 
-def crawl_user_repos(engine, tables, user):
+def crawl_user_repos(session, tables, user):
     # TODO this could be combined with add_contributors realistically
     js  = REQ2JSON(USER_REPOS, user)
     repos = [r[REPNAME] for r in js]
     for repo in repos:
-        push_entity(engine, tables, REPO_ENT, repo)
+        push_entity(session, tables, REPO_ENT, repo)
 
     return
 
@@ -150,15 +151,15 @@ def crawl_user_repos(engine, tables, user):
 """
 Add a random repo to the queue
 
-engine  - sqla db engine
+session - sqla session for this thread
 tables  - collection of sqla table objects
 """
-def fetch_random_repo(engine, tables):
+def fetch_random_repo(session, tables):
     page = randint(0, RAND_MAX)
     js = REQ2JSON(RAND_REPO, page)
     select = choice(js)
     repo = select[URL_ATTR]
-    push_entity(engine, tables, REPO_ENT, repo)
+    push_entity(session, tables, REPO_ENT, repo)
 
 
 """
@@ -180,22 +181,23 @@ def make_temp_dir():
 """
 Remove the first entity from a queue table
 
-engine  - sqla db engine
+session - sqla session for this thread
 tables  - collection of sqla table objects
 tabkey  - the relevant table to pop from
 
 return  - the string data of the popped entity (repo url / username)
 """
-def pop_entity(engine, tables, tabkey):
-    queue = tables[tabkey + QUEUE_EXT]
-    agg = tables[tabkey]
-    query = select(queue).limit(TOP)
-    out = engine.execute(query).fetchone()
+def pop_entity(session, tables, tabkey):
+    queue   = tables[tabkey + QUEUE_EXT]
+    agg     = tables[tabkey]
+    query   = select(queue).limit(TOP)
+    out     = session.execute(query).fetchone()
     if out is not None:
         query = delete(queue).where(queue.c.id == out.id)
-        engine.execute(query)
+        session.execute(query)
+        session.commit()
         query = select(agg).where(agg.c.id == out.id)
-        out = engine.execute(query).fetchone()[NAME_IND]
+        out = session.execute(query).fetchone()[NAME_IND]
 
     return (out)
 
@@ -203,24 +205,20 @@ def pop_entity(engine, tables, tabkey):
 """
 Pop a repo from the repo queue and repopulate if necessary
 
-engine  - sqla db engine
+session - sqla session for this thread
 tables  - collection of sqla table objects
 
 returns - the shortened URL of the repo popped
 """
-def pop_repo(engine, tables):
-    print("Popping repo")
-    repo = pop_entity(engine, tables, REPO_ENT)
+def pop_repo(session, tables):
+    repo = pop_entity(session, tables, REPO_ENT)
     while repo is None:
-        print("Popping user")
-        user = pop_entity(engine, tables, USER_ENT)
+        user = pop_entity(session, tables, USER_ENT)
         if user is None:
-            print("Scraping repo")
-            fetch_random_repo(engine, tables)
+            fetch_random_repo(session, tables)
         else:
-            print("Crawling user")
-            crawl_user_repos(engine, tables, user)
-        repo = pop_entity(engine, tables, REPO_ENT)
+            crawl_user_repos(session, tables, user)
+        repo = pop_entity(session, tables, REPO_ENT)
 
     return repo
 
@@ -228,23 +226,24 @@ def pop_repo(engine, tables):
 """
 Push a user or repo to its respective queue
 
-engine  - sqla db engine
+session - sqla session for this thread
 tables  - collection of sqla table objects
 tabkey  - the relevant table to push to
 url     - the (maybe shortened) URL of the entity to push
 """
-def push_entity(engine, tables, tabkey, url):
+def push_entity(session, tables, tabkey, url):
     # TODO rethink -- pass the exact table now that others scrapped?
     base_ent, queue = tables[tabkey], tables[tabkey + QUEUE_EXT]
     cut = url if url.count(URL_DELIM) < MIN_DELIMS else URLSTRIP(url)
     query = select(base_ent).where(base_ent.c.name == cut)
-    check = engine.execute(query).fetchone()
+    check = session.execute(query).fetchone()
     if check is None:
         entry = {BASE_NAME: cut}
-        engine.execute(insert(base_ent).values(entry))
-        fkey = engine.execute(query).fetchone().id
+        session.execute(insert(base_ent).values(entry))
+        fkey = session.execute(query).fetchone().id
         link = {tabkey: fkey}
-        engine.execute(insert(queue).values(link))
+        session.execute(insert(queue).values(link))
+        session.commit()
 
 
 """
@@ -273,7 +272,7 @@ def main():
 
     # Unpack argv and set up environment
     count = int(argv[COUNT])
-    dbe, tables = connect_db()
+    dbs, tables = connect_db()
     tempdir = make_temp_dir()
 
     # Spider across all of github haphazardly
@@ -281,9 +280,9 @@ def main():
     for _ in range(count):
         search = None
         try:
-            search = pop_repo(dbe, tables)
-            add_contributors(dbe, tables, search)
-            input("look\n")
+            search = pop_repo(dbs, tables)
+            add_contributors(dbs, tables, search)
+            input(f"popped |{search}|")
         except KeyboardInterrupt:
             requeue = search
             break
@@ -293,7 +292,8 @@ def main():
     if requeue is not None:
         # Current repo is probably not fully analysed yet so re-push
         # but we can't push_entity because the repo is already seen
-        dbe.execute(insert(tables[REPO_ENT]).values({BASE_NAME: search}))
+        dbs.execute(insert(tables[REPO_ENT]).values({BASE_NAME: search}))
+        dbs.commit()
 
 if __name__ == "__main__":
     main()
