@@ -31,6 +31,7 @@ GOOD_ARGC   = 2
 BASE_NAME   = "name"
 DB_ADDR     = "mariadb://root@localhost:3306/gitprivacyspider"
 GOOD_TABLES = {"repo", "user", "repo_queue", "hits", "user_queue"}
+HITS        = "hits"
 ID          = "id"
 IDEXT       = "." + ID
 LINK_LEN    = 255
@@ -42,6 +43,11 @@ USER_ENT    = "user"
 
 # Error Messages
 BAD_TABLES  = "Tables do not match required schema; please fix in MariaDB"
+
+# Exif
+EXIFTOOL    = "exiftool"
+GPS_ATTR    = "GPS"
+UTF8        = "utf-8"
 
 # Exit codes
 BAD_ARGV    = 1
@@ -146,7 +152,7 @@ def connect_db():
             Column(REPO_ENT,    Integer, ForeignKey(REPO_ENT + IDEXT))
         )
         hits = Table(
-            "hits", md,
+            HITS, md,
             Column(ID,          Integer, primary_key = True),
             Column(REPO_ENT,    Integer, ForeignKey(REPO_ENT + IDEXT)),
             Column("committer", Integer, ForeignKey(USER_ENT + IDEXT)),
@@ -192,6 +198,8 @@ def fetch_random_repo(session, tables):
     js = REQ2JSON(RAND_REPO, page)
     select = choice(js)
     repo = select[URL_ATTR]
+    # temp
+    repo = "GNUNotUsername/git-privacy-spider"
     push_entity(session, tables, REPO_ENT, repo)
 
 
@@ -210,6 +218,13 @@ def gen_temp_path():
     return tempdir
 
 
+"""
+Resolve the path of every file in a repo (less some git additions)
+
+tempdir - the temporary directory for this repo
+
+returns - the path to every file in this repo with spaces escaped
+"""
 def itemise_repo(tempdir):
     try:
         rmtree(tempdir + sep + GIT_EXTRA)
@@ -294,6 +309,12 @@ def push_entity(session, tables, tabkey, url):
         session.commit()
 
 
+def scan_exif(session, tables, repo, paths):
+    for p in paths:
+        exif = check_output([EXIFTOOL, p]).decode(UTF8)
+        if GPS_ATTR in exif:
+            print(p)
+
 """
 Ensure that the given arg vector is valid
 
@@ -336,6 +357,7 @@ def main():
             mkdir(tempdir)
             checkout_repo(search, tempdir)
             paths = itemise_repo(tempdir)
+            scan_exif(dbs, tables[HITS], search, paths)
             input("look")
             requeue = None
             rmtree(tempdir)
