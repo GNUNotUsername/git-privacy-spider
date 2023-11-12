@@ -5,6 +5,7 @@ USAGE:  sudo python gps.py count
 """
 # TODO add csv write option
 # TODO multithread this
+# TODO make schema checking idiotproof
 
 
 from json               import loads
@@ -15,7 +16,8 @@ from shutil             import rmtree
 from string             import ascii_letters as al
 from sys                import argv
 
-from sqlalchemy         import Column,          create_engine, delete, ForeignKey, Integer, insert, MetaData, select, String, Table
+from subprocess         import check_output,    DEVNULL,        run
+from sqlalchemy         import Column,          create_engine,  delete, ForeignKey, Integer, insert, MetaData, select, String, Table
 from sqlalchemy.orm     import scoped_session,  sessionmaker
 from sqlalchemy_utils   import create_database, database_exists
 
@@ -46,6 +48,7 @@ BAD_TABS    = 2
 
 # Github API
 API_HEAD    = "https://api.github.com/"
+CLONE_TMP   = "git clone https://www.github.com/{0}.git {1}"
 CONTRIBS    = (API_HEAD + "repos/{0}/contributors")
 RAND_MAX    = 255   # I have no idea what this number should be
 RAND_REPO   = (API_HEAD + "repositories?since={0}")
@@ -56,6 +59,9 @@ USER_REPOS  = (API_HEAD + "users/{0}/repos")
 
 # IO
 WRITE       = "w"
+
+# Logging
+BAD_CLONE   = "Repo {0} could not be cloned"
 
 # Pathing
 HIDE        = "."
@@ -74,15 +80,25 @@ REQ2JSON    = lambda f, u   : loads(get(f.format(u)).text)
 """
 Push unseen contributors for a repo into the user queue
 
-engine  - sqla db engine
+session - sqla session for this thread
 tables  - collection of sqla table objects
 repo    - url of the repo for which to enqueue the contributors of
 """
-def add_contributors(engine, tables, repo):
+def add_contributors(session, tables, repo):
     js  = REQ2JSON(CONTRIBS, repo)
     contribs = [u[UNAME] for u in js]
     for user in contribs:
-        push_entity(engine, tables, USER_ENT, user)
+        push_entity(session, tables, USER_ENT, user)
+
+
+def checkout_repo(url, tempdir):
+    cmd = CLONE_TMP.format(url, tempdir).split()
+    ret = run(cmd, stdout = DEVNULL, stderr = DEVNULL).returncode
+
+    if ret:
+        print(BAD_CLONE.format(url))
+
+    return ret
 
 
 """
@@ -131,11 +147,10 @@ def connect_db():
             print(BAD_TABLES)
             exit(BAD_TABS)
         # Else; we'll just trust each table has the right cols for now
-        # TODO make it idiot proof later
     tables = md.tables
-    session = scoped_session(sessionmaker(bind = engine))
 
-    return session, tables
+
+    return engine, tables
 
 
 def crawl_user_repos(session, tables, user):
@@ -163,17 +178,16 @@ def fetch_random_repo(session, tables):
 
 
 """
-Randomly generate a hidden directory to put repos in temporarily
+Randomly generate the path of a hidden directory to put repos in temporarily
 
 returns - the name of the directory
 """
-def make_temp_dir():
+def gen_temp_path():
     tempdir = ""
     while True:
         tempdir = HIDE + "".join([choice(al) for _ in range(RAND_LEN)])
         if not path.isdir(tempdir):
             break
-    mkdir(tempdir)
 
     return tempdir
 
@@ -272,17 +286,23 @@ def main():
 
     # Unpack argv and set up environment
     count = int(argv[COUNT])
-    dbs, tables = connect_db()
-    tempdir = make_temp_dir()
+    dbe, tables = connect_db()
+    dbs = scoped_session(sessionmaker(bind = dbe))
 
     # Spider across all of github haphazardly
     requeue = None
+    tempdir = gen_temp_path()
     for _ in range(count):
         search = None
         try:
             search = pop_repo(dbs, tables)
             add_contributors(dbs, tables, search)
             input(f"popped |{search}|")
+            mkdir(tempdir)
+            checkout_repo(search, tempdir)
+            input("look")
+            rmtree(tempdir)
+            input("again")
         except KeyboardInterrupt:
             requeue = search
             break
