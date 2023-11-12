@@ -9,13 +9,14 @@ USAGE:  sudo python gps.py count
 
 
 from json               import loads
-from os                 import mkdir,   path
+from os                 import mkdir,   path, sep
 from random             import choice,  randint
 from requests           import get
 from shutil             import rmtree
 from string             import ascii_letters as al
 from sys                import argv
 
+from pathlib            import Path
 from subprocess         import check_output,    DEVNULL,        run
 from sqlalchemy         import Column,          create_engine,  delete, ForeignKey, Integer, insert, MetaData, select, String, Table
 from sqlalchemy.orm     import scoped_session,  sessionmaker
@@ -64,6 +65,9 @@ WRITE       = "w"
 BAD_CLONE   = "Repo {0} could not be cloned"
 
 # Pathing
+ALL         = "*"
+GIT_EXTRA   = ".git"
+GH_EXTRA    = ".github"
 HIDE        = "."
 RAND_LEN    = 20
 
@@ -73,6 +77,7 @@ NO_START    = 3
 URL_DELIM   = "/"
 
 
+CUT_SPACE   = lambda s      : str(s).replace(" ", "\ ")
 URLSTRIP    = lambda u      : URL_DELIM.join(u.split(URL_DELIM)[NO_START:])
 REQ2JSON    = lambda f, u   : loads(get(f.format(u)).text)
 
@@ -205,6 +210,22 @@ def gen_temp_path():
     return tempdir
 
 
+def itemise_repo(tempdir):
+    try:
+        rmtree(tempdir + sep + GIT_EXTRA)
+    except FileNotFoundError:
+        pass
+    try:
+        rmtree(tempdir + sep + GH_EXTRA)
+    except FileNotFoundError:
+        pass
+    base = Path(tempdir)
+    files = list(base.rglob(ALL))
+    no_spaces = [CUT_SPACE(f) for f in files]
+
+    return no_spaces
+
+
 """
 Remove the first entity from a queue table
 
@@ -309,19 +330,25 @@ def main():
         search = None
         try:
             search = pop_repo(dbs, tables)
+            requeue = search
             add_contributors(dbs, tables, search)
             input(f"popped |{search}|")
             mkdir(tempdir)
             checkout_repo(search, tempdir)
+            paths = itemise_repo(tempdir)
             input("look")
+            requeue = None
             rmtree(tempdir)
             input("again")
         except KeyboardInterrupt:
-            requeue = search
             break
 
     # Clean up anything left over
-    rmtree(tempdir)
+    try:
+        rmtree(tempdir)
+    except FileNotFoundError:
+        pass
+
     if requeue is not None:
         # Current repo is probably not fully analysed yet so re-push
         # but we can't push_entity because the repo is already seen
