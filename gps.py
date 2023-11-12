@@ -91,6 +91,14 @@ def add_contributors(session, tables, repo):
         push_entity(session, tables, USER_ENT, user)
 
 
+"""
+Check out a repo into a hidden temporary dir
+
+url     - shortened url of repo to check out
+tempdir - path of hidden temporary directory to checkout into
+
+returns - return code of git clone command
+"""
 def checkout_repo(url, tempdir):
     cmd = CLONE_TMP.format(url, tempdir).split()
     ret = run(cmd, stdout = DEVNULL, stderr = DEVNULL).returncode
@@ -153,14 +161,19 @@ def connect_db():
     return engine, tables
 
 
+"""
+Enqueue every (<=30) repo a user has contributed to
+
+session - sqla session for this thread
+tables  - collection of sqla table objects
+user    - username of user in question
+"""
 def crawl_user_repos(session, tables, user):
     # TODO this could be combined with add_contributors realistically
     js  = REQ2JSON(USER_REPOS, user)
     repos = [r[REPNAME] for r in js]
     for repo in repos:
         push_entity(session, tables, REPO_ENT, repo)
-
-    return
 
 
 """
