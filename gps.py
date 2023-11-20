@@ -36,6 +36,7 @@ ID          = "id"
 IDEXT       = "." + ID
 LINK_LEN    = 255
 NAME_IND    = 1
+PATH        = "path"
 QUEUE_EXT   = "_queue"
 REPO_ENT    = "repo"
 TOP         = 1
@@ -155,8 +156,7 @@ def connect_db():
             HITS, md,
             Column(ID,          Integer, primary_key = True),
             Column(REPO_ENT,    Integer, ForeignKey(REPO_ENT + IDEXT)),
-            Column("committer", Integer, ForeignKey(USER_ENT + IDEXT)),
-            Column("path", String(LINK_LEN))
+            Column(PATH, String(LINK_LEN))
         )
         md.create_all(engine)
     else:
@@ -216,6 +216,23 @@ def gen_temp_path():
             break
 
     return tempdir
+
+
+"""
+Add a random repo to the queue
+
+session - sqla session for this thread
+tables  - collection of sqla table objects
+repo    - repo to look up
+
+returns - the table ID for the selected repo
+"""
+def get_repo_id(session, tables, repo):
+    repos = tables[REPO_ENT]
+    query = select(repos).where(repos.c.name == repo)
+    repo_id = session.execute(query).fetchone().id
+
+    return repo_id
 
 
 """
@@ -316,9 +333,7 @@ tables  - collection of sqla table objects
 repo    - name of repo to requeue
 """
 def requeue_repo(session, tables, repo):
-    repos = tables[REPO_ENT]
-    query = select(repos).where(repos.c.name == repo)
-    repo_id = session.execute(query).fetchone().id
+    repo_id = get_repo_id(session, tables, repo)
     queue = tables[REPO_ENT + QUEUE_EXT]
     session.execute(insert(queue).values({REPO_ENT: repo_id}))
     session.commit()
@@ -337,7 +352,10 @@ def scan_exif(session, tables, repo, paths):
         exif = check_output([EXIFTOOL, p]).decode(UTF8)
         if GPS_ATTR in exif:
             _, _, path = p.partition(sep)
-            print(f"found some GPS data in {path}")
+            repo_id = get_repo_id(session, tables, repo)
+            record = {REPO_ENT: repo_id, PATH: path}
+            session.execute(insert(tables[HITS]).values(record))
+            session.commit()
 
 """
 Ensure that the given arg vector is valid
@@ -377,15 +395,12 @@ def main():
             search = pop_repo(dbs, tables)
             requeue = search
             add_contributors(dbs, tables, search)
-            input(f"popped |{search}|")
             mkdir(tempdir)
             checkout_repo(search, tempdir)
             paths = itemise_repo(tempdir)
-            scan_exif(dbs, tables[HITS], search, paths)
-            input("look")
+            scan_exif(dbs, tables, search, paths)
             requeue = None
             rmtree(tempdir)
-            input("again")
         except KeyboardInterrupt:
             break
 
