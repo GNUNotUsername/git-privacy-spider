@@ -1,14 +1,14 @@
 """
 A web spider for analysing GPS data accidentally committed to github
 
-USAGE:  sudo python gps.py <-s path> | <[-j threads] count>
+USAGE:  sudo python gps.py <-s path> | <-d path> | <[-j threads] count>
 """
-# TODO add csv write option
 # TODO add csv read option
 # TODO multithread this
 # TODO make schema checking idiotproof
 
 
+from csv                import writer
 from json               import loads
 from os                 import mkdir,   path,   sep
 from random             import choice,  randint
@@ -30,8 +30,12 @@ FLAG        = 1
 GOOD_ARGCS  = range(2, 5)
 PATH_IND    = 2
 SERIAL_FLAG = "-s"
+DSRIAL_FLAG = "-d"
 THREAD_FLAG = "-j"
 THREADS     = 2
+
+# CSV
+CSV_HEADER  = ["Repo Name", "Repo Path"]
 
 # Databases
 BASE_NAME   = "name"
@@ -72,6 +76,7 @@ URL_ATTR    = "html_url"
 USER_REPOS  = (API_HEAD + "users/{0}/repos")
 
 # IO
+APPEND      = "a"
 WRITE       = "w"
 
 # Logging
@@ -192,6 +197,10 @@ def crawl_user_repos(session, tables, user):
     repos = [r[REPNAME] for r in js]
     for repo in repos:
         push_entity(session, tables, REPO_ENT, repo)
+
+
+def deserialise_results(session, tables, path):
+    print("Deserialisarino")
 
 
 """
@@ -367,8 +376,35 @@ def scan_exif(session, tables, repo, paths):
             # TODO make this not allow duplicates
 
 
-def serialise_results(session, table, path):
-    print("Serialiserino")
+"""
+Append the contents of the hits table to a csv file
+
+session - sqla session for this thread
+tables  - collection of sqla table objects
+path    - path to the file to append to
+"""
+def serialise_results(session, tables, path):
+    try:
+        f = open(path, APPEND)
+    except FileNotFoundError:
+        return
+
+    hits = session.execute(select(tables[HITS])).fetchall()
+    if len(hits) == 0:
+        return
+
+    repos = {}
+    repos_all = tables[REPO_ENT]
+    csvw = writer(f)
+    csvw.writerow(CSV_HEADER)
+
+    for _, repo_id, repo_path in hits:
+        if repo_id not in repos:
+            query = select(repos_all).where(repos_all.c.id == repo_id)
+            repo_name = session.execute(query).fetchone()[NAME_IND]
+            repos[repo_id] = repo_name
+        name = repos[repo_id]
+        csvw.writerow([name, repo_path])
 
 
 """
@@ -392,7 +428,7 @@ def validate(argv):
                 threads = 1
                 verdict = IS_POSINT(count)
             case 3:
-                verdict = (flag == SERIAL_FLAG)
+                verdict = (flag == SERIAL_FLAG) or (flag == DSRIAL_FLAG)
                 threads = count = 0
             case 4:
                 threads = argv[THREADS]
@@ -400,7 +436,6 @@ def validate(argv):
                         and IS_POSINT(threads)
             case _:
                 verdict = False
-
 
         if verdict:
             count = int(count)
@@ -420,7 +455,12 @@ def main():
     dbs = scoped_session(sessionmaker(bind = dbe))
 
     if threads == 0:
-        serialise_results(dbs, tables[HITS], argv[PATH_IND])
+        flag = argv[FLAG]
+        path = argv[PATH_IND]
+        if flag == SERIAL_FLAG:
+            serialise_results(dbs, tables, path)
+        else:
+            deserialise_results(dbs, tables, path)
 
     # Spider across all of github haphazardly
     requeue = None
