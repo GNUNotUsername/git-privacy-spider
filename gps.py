@@ -1,9 +1,10 @@
 """
 A web spider for analysing GPS data accidentally committed to github
 
-USAGE:  sudo python gps.py count
+USAGE:  sudo python gps.py <-s path> | <[-j threads] count>
 """
 # TODO add csv write option
+# TODO add csv read option
 # TODO multithread this
 # TODO make schema checking idiotproof
 
@@ -24,8 +25,13 @@ from sqlalchemy_utils   import create_database, database_exists
 
 
 # Argc & Argv
-COUNT       = 1
-GOOD_ARGC   = 2
+COUNT       = -1
+FLAG        = 1
+GOOD_ARGCS  = range(2, 5)
+PATH_IND    = 2
+SERIAL_FLAG = "-s"
+THREAD_FLAG = "-j"
+THREADS     = 2
 
 # Databases
 BASE_NAME   = "name"
@@ -85,8 +91,9 @@ URL_DELIM   = "/"
 
 
 CUT_SPACE   = lambda s      : str(s).replace(" ", "\ ")
-URLSTRIP    = lambda u      : URL_DELIM.join(u.split(URL_DELIM)[NO_START:])
+IS_POSINT   = lambda n      : n.isnumeric() and int(n) > 0
 REQ2JSON    = lambda f, u   : loads(get(f.format(u)).text)
+URLSTRIP    = lambda u      : URL_DELIM.join(u.split(URL_DELIM)[NO_START:])
 
 
 """
@@ -277,6 +284,7 @@ def pop_entity(session, tables, tabkey):
         session.commit()
         query = select(agg).where(agg.c.id == out.id)
         out = session.execute(query).fetchone()[NAME_IND]
+        # TODO there's an index error floatin around here...
 
     return (out)
 
@@ -356,35 +364,63 @@ def scan_exif(session, tables, repo, paths):
             record = {REPO_ENT: repo_id, PATH: path}
             session.execute(insert(tables[HITS]).values(record))
             session.commit()
+            # TODO make this not allow duplicates
+
+
+def serialise_results(session, table, path):
+    print("Serialiserino")
+
 
 """
 Ensure that the given arg vector is valid
 
 argv    - the arg vector to validate
 
-returns - true iff valid; else false
+returns - true iff valid ; no. repos to examine ; no. threads to use
 """
 def validate(argv):
-    verdict = True
+    verdict = False
+    count = 0
+    threads = 0
     argc = len(argv)
 
-    verdict = argc == GOOD_ARGC
-    if verdict:
+    if argc in GOOD_ARGCS:
         count = argv[COUNT]
-        verdict = count.isnumeric() and int(count) > 0
+        flag = argv[FLAG]
+        match argc:
+            case 2:
+                threads = 1
+                verdict = IS_POSINT(count)
+            case 3:
+                verdict = (flag == SERIAL_FLAG)
+                threads = count = 0
+            case 4:
+                threads = argv[THREADS]
+                verdict = (flag == THREAD_FLAG) and IS_POSINT(count) \
+                        and IS_POSINT(threads)
+            case _:
+                verdict = False
 
-    return verdict
+
+        if verdict:
+            count = int(count)
+            threads = int(threads)
+
+    return verdict, count, threads
 
 
 def main():
     # Validate argv
-    if not validate(argv):
+    verdict, count, threads = validate(argv)
+    if not verdict:
         exit(BAD_ARGV)
 
-    # Unpack argv and set up environment
-    count = int(argv[COUNT])
+    # Set up environment
     dbe, tables = connect_db()
     dbs = scoped_session(sessionmaker(bind = dbe))
+
+    if threads == 0:
+        serialise_results(dbs, tables[HITS], argv[PATH_IND])
 
     # Spider across all of github haphazardly
     requeue = None
