@@ -308,6 +308,15 @@ def push_entity(session, tables, tabkey, url):
         session.commit()
 
 
+def requeue_repo(sessions, tables, repo):
+    repos = tables[REPO_ENT]
+    query = select(repos).where(repos.c.name == repo)
+    repo_id = dbs.execute(query).fetchone().id
+    queue = tables[REPO_ENT + QUEUE_EXT]
+    dbs.execute(insert(queue).values({REPO_ENT: repo_id}))
+    dbs.commit()
+
+
 def scan_exif(session, tables, repo, paths):
     for p in paths:
         exif = check_output([EXIFTOOL, p]).decode(UTF8)
@@ -373,9 +382,7 @@ def main():
     if requeue is not None:
         # Current repo is probably not fully analysed yet so re-push
         # but we can't push_entity because the repo is already seen
-        # TODO this was dumb and doesn't work
-        dbs.execute(insert(tables[REPO_ENT]).values({BASE_NAME: search}))
-        dbs.commit()
+        requeue_repo(dbs, tables, search)
 
 if __name__ == "__main__":
     main()
