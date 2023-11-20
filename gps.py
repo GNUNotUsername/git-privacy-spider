@@ -308,6 +308,13 @@ def push_entity(session, tables, tabkey, url):
         session.commit()
 
 
+"""
+Requeue an already seen repo
+
+session - sqla session for this thread
+tables  - collection of sqla table objects
+repo    - name of repo to requeue
+"""
 def requeue_repo(sessions, tables, repo):
     repos = tables[REPO_ENT]
     query = select(repos).where(repos.c.name == repo)
@@ -317,11 +324,19 @@ def requeue_repo(sessions, tables, repo):
     dbs.commit()
 
 
+"""
+Scan every file in a list of paths for GPS exif data
+
+session - sqla session for this thread
+tables  - collection of sqla table objects
+repo    - the repo these files belongs to
+paths   - list of file paths to scan
+"""
 def scan_exif(session, tables, repo, paths):
     for p in paths:
         exif = check_output([EXIFTOOL, p]).decode(UTF8)
         if GPS_ATTR in exif:
-            print(f"found some shit in {p}")
+            print(f"found some GPS data in {p}")
 
 """
 Ensure that the given arg vector is valid
@@ -379,9 +394,8 @@ def main():
     except FileNotFoundError:
         pass
 
+    # This current repo wasn't fully analysed -- requeue it for next time
     if requeue is not None:
-        # Current repo is probably not fully analysed yet so re-push
-        # but we can't push_entity because the repo is already seen
         requeue_repo(dbs, tables, search)
 
 if __name__ == "__main__":
