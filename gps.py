@@ -9,7 +9,7 @@ USAGE:  sudo python gps.py count
 
 
 from json               import loads
-from os                 import mkdir,   path, sep
+from os                 import mkdir,   path,   sep
 from random             import choice,  randint
 from requests           import get
 from shutil             import rmtree
@@ -234,11 +234,10 @@ def itemise_repo(tempdir):
         rmtree(tempdir + sep + GH_EXTRA)
     except FileNotFoundError:
         pass
-    base = Path(tempdir)
-    files = list(base.rglob(ALL))
-    no_spaces = [CUT_SPACE(f) for f in files]
+    base = list(Path(tempdir).rglob(ALL))
+    files = list(filter(lambda f : not path.isdir(f), base))
 
-    return no_spaces
+    return files
 
 
 """
@@ -313,7 +312,7 @@ def scan_exif(session, tables, repo, paths):
     for p in paths:
         exif = check_output([EXIFTOOL, p]).decode(UTF8)
         if GPS_ATTR in exif:
-            print(p)
+            print(f"found some shit in {p}")
 
 """
 Ensure that the given arg vector is valid
@@ -374,6 +373,7 @@ def main():
     if requeue is not None:
         # Current repo is probably not fully analysed yet so re-push
         # but we can't push_entity because the repo is already seen
+        # TODO this was dumb and doesn't work
         dbs.execute(insert(tables[REPO_ENT]).values({BASE_NAME: search}))
         dbs.commit()
 
