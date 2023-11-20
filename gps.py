@@ -234,7 +234,7 @@ def itemise_repo(tempdir):
         rmtree(tempdir + sep + GH_EXTRA)
     except FileNotFoundError:
         pass
-    base = list(Path(tempdir).rglob(ALL))
+    base = map(lambda p : str(p), Path(tempdir).rglob(ALL))
     files = list(filter(lambda f : not path.isdir(f), base))
 
     return files
@@ -315,13 +315,13 @@ session - sqla session for this thread
 tables  - collection of sqla table objects
 repo    - name of repo to requeue
 """
-def requeue_repo(sessions, tables, repo):
+def requeue_repo(session, tables, repo):
     repos = tables[REPO_ENT]
     query = select(repos).where(repos.c.name == repo)
-    repo_id = dbs.execute(query).fetchone().id
+    repo_id = session.execute(query).fetchone().id
     queue = tables[REPO_ENT + QUEUE_EXT]
-    dbs.execute(insert(queue).values({REPO_ENT: repo_id}))
-    dbs.commit()
+    session.execute(insert(queue).values({REPO_ENT: repo_id}))
+    session.commit()
 
 
 """
@@ -336,7 +336,8 @@ def scan_exif(session, tables, repo, paths):
     for p in paths:
         exif = check_output([EXIFTOOL, p]).decode(UTF8)
         if GPS_ATTR in exif:
-            print(f"found some GPS data in {p}")
+            _, _, path = p.partition(sep)
+            print(f"found some GPS data in {path}")
 
 """
 Ensure that the given arg vector is valid
@@ -391,7 +392,7 @@ def main():
     # Clean up anything left over
     try:
         rmtree(tempdir)
-    except FileNotFoundError:
+    except FileNotFoundError as e:
         pass
 
     # This current repo wasn't fully analysed -- requeue it for next time
