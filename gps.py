@@ -1,14 +1,13 @@
 """
 A web spider for analysing GPS data accidentally committed to github
 
-USAGE:  sudo python gps.py <-s path> | <-d path> | <[-j threads] count>
+USAGE:  sudo python gps.py <-s path> | <[-j threads] count>
 """
-# TODO add csv read option
 # TODO multithread this
 # TODO make schema checking idiotproof
 
 
-from csv                import writer
+from csv                import reader,  writer
 from json               import loads
 from os                 import mkdir,   path,   sep
 from random             import choice,  randint
@@ -30,12 +29,11 @@ FLAG        = 1
 GOOD_ARGCS  = range(2, 5)
 PATH_IND    = 2
 SERIAL_FLAG = "-s"
-DSRIAL_FLAG = "-d"
 THREAD_FLAG = "-j"
 THREADS     = 2
 
 # CSV
-CSV_HEADER  = ["Repo Name", "Repo Path"]
+CSV_HEADER  = ["Repo", "Path"]
 
 # Databases
 BASE_NAME   = "name"
@@ -76,7 +74,6 @@ URL_ATTR    = "html_url"
 USER_REPOS  = (API_HEAD + "users/{0}/repos")
 
 # IO
-APPEND      = "a"
 WRITE       = "w"
 
 # Logging
@@ -95,7 +92,6 @@ NO_START    = 3
 URL_DELIM   = "/"
 
 
-CUT_SPACE   = lambda s      : str(s).replace(" ", "\ ")
 IS_POSINT   = lambda n      : n.isnumeric() and int(n) > 0
 REQ2JSON    = lambda f, u   : loads(get(f.format(u)).text)
 URLSTRIP    = lambda u      : URL_DELIM.join(u.split(URL_DELIM)[NO_START:])
@@ -199,10 +195,6 @@ def crawl_user_repos(session, tables, user):
         push_entity(session, tables, REPO_ENT, repo)
 
 
-def deserialise_results(session, tables, path):
-    print("Deserialisarino")
-
-
 """
 Add a random repo to the queue
 
@@ -246,7 +238,8 @@ returns - the table ID for the selected repo
 def get_repo_id(session, tables, repo):
     repos = tables[REPO_ENT]
     query = select(repos).where(repos.c.name == repo)
-    repo_id = session.execute(query).fetchone().id
+    find  = session.execute(query).fetchone()
+    repo_id = None if find is None else find.id
 
     return repo_id
 
@@ -384,17 +377,13 @@ tables  - collection of sqla table objects
 path    - path to the file to append to
 """
 def serialise_results(session, tables, path):
-    try:
-        f = open(path, APPEND)
-    except FileNotFoundError:
-        return
-
     hits = session.execute(select(tables[HITS])).fetchall()
     if len(hits) == 0:
         return
 
     repos = {}
     repos_all = tables[REPO_ENT]
+    f = open(path, WRITE)
     csvw = writer(f)
     csvw.writerow(CSV_HEADER)
 
@@ -405,6 +394,7 @@ def serialise_results(session, tables, path):
             repos[repo_id] = repo_name
         name = repos[repo_id]
         csvw.writerow([name, repo_path])
+    f.close()
 
 
 """
@@ -428,7 +418,7 @@ def validate(argv):
                 threads = 1
                 verdict = IS_POSINT(count)
             case 3:
-                verdict = (flag == SERIAL_FLAG) or (flag == DSRIAL_FLAG)
+                verdict = (flag == SERIAL_FLAG)
                 threads = count = 0
             case 4:
                 threads = argv[THREADS]
@@ -455,12 +445,7 @@ def main():
     dbs = scoped_session(sessionmaker(bind = dbe))
 
     if threads == 0:
-        flag = argv[FLAG]
-        path = argv[PATH_IND]
-        if flag == SERIAL_FLAG:
-            serialise_results(dbs, tables, path)
-        else:
-            deserialise_results(dbs, tables, path)
+        serialise_results(dbs, tables, argv[PATH_IND])
 
     # Spider across all of github haphazardly
     requeue = None
