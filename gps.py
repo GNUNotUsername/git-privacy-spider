@@ -106,6 +106,10 @@ class Threadargs:
         self._max   = top
         self._dbe   = engine
         self._tabs  = tables
+        self._paths = {}
+        while len(paths) < threads:
+            self._paths.add(gen_temp_path())
+        self._paths = list(self._paths)
 
     def inc(self):
         self._count += 1
@@ -113,8 +117,8 @@ class Threadargs:
     def get_temp_path(self, thread_no):
         return self._temps[thread_no]
 
-    def get_engine(self):
-        return self._engine
+    def get_session(self):
+        return scoped_session(sessionmaker(bind = self._engine))
 
     def get_tables(self):
         return self._tabs
@@ -398,12 +402,12 @@ def scan_exif(session, tables, repo, paths):
 """
 Append the contents of the hits table to a csv file
 
-session - sqla session for this thread
+engine  - sqla engine
 tables  - collection of sqla table objects
 path    - path to the file to append to
 """
-def serialise_results(session, tables, path):
-    hits = session.execute(select(tables[HITS])).fetchall()
+def serialise_results(engine, tables, path):
+    hits = engine.execute(select(tables[HITS])).fetchall()
     if len(hits) == 0:
         return
 
@@ -416,11 +420,17 @@ def serialise_results(session, tables, path):
     for _, repo_id, repo_path in hits:
         if repo_id not in repos:
             query = select(repos_all).where(repos_all.c.id == repo_id)
-            repo_name = session.execute(query).fetchone()[NAME_IND]
+            repo_name = engine.execute(query).fetchone()[NAME_IND]
             repos[repo_id] = repo_name
         name = repos[repo_id]
         csvw.writerow([name, repo_path])
     f.close()
+
+
+def thread_scraping(thread_no, args):
+    # Unpack args
+    # call the thing that you'll end up calling down later
+    pass
 
 
 """
@@ -468,10 +478,22 @@ def main():
 
     # Set up environment
     dbe, tables = connect_db()
-    dbs = scoped_session(sessionmaker(bind = dbe))
 
     if threads == 0:
-        serialise_results(dbs, tables, argv[PATH_IND])
+        serialise_results(dbe, tables, argv[PATH_IND])
+    elif threads > 1:
+        running = []
+        args = Threadargs(count, threads, dbe, tables)
+        for t in range(threads):
+            add = Thread(target = thread_scraping, args = (t, args))
+            add.start()
+            running.append(add)
+        for t in running:
+            # Probably a better way of doing this
+            t.join()
+    else:
+        # No point messing around with threadargs
+        dbs = scoped_session(sessionmaker(bind = dbe))
 
     # Spider across all of github haphazardly
     requeue = None
