@@ -98,6 +98,32 @@ URLSTRIP    = lambda u      : URL_DELIM.join(u.split(URL_DELIM)[NO_START:])
 
 
 """
+Wrapper for shared memory between threads
+"""
+class Threadargs:
+    def __init__(self, top, threads, engine, tables):
+        self._count = 0
+        self._max   = top
+        self._dbe   = engine
+        self._tabs  = tables
+
+    def inc(self):
+        self._count += 1
+
+    def get_temp_path(self, thread_no):
+        return self._temps[thread_no]
+
+    def get_engine(self):
+        return self._engine
+
+    def get_tables(self):
+        return self._tabs
+
+    def is_finished(self):
+        return self._count >= self._max
+
+
+"""
 Push unseen contributors for a repo into the user queue
 
 session - sqla session for this thread
