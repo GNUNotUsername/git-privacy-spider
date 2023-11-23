@@ -15,12 +15,13 @@ from requests           import get
 from shutil             import rmtree
 from string             import ascii_letters as al
 from sys                import argv
+from threading          import Thread
 
 from pathlib            import Path
-from subprocess         import check_output,    DEVNULL,        run
-from sqlalchemy         import Column,          create_engine,  delete, ForeignKey, Integer, insert, MetaData, select, String, Table
-from sqlalchemy.orm     import scoped_session,  sessionmaker
-from sqlalchemy_utils   import create_database, database_exists
+from subprocess         import CalledProcessError,  check_output,   DEVNULL,    run
+from sqlalchemy         import Column,              create_engine,  delete,     ForeignKey, Integer, insert, MetaData, select, String, Table
+from sqlalchemy.orm     import scoped_session,      sessionmaker
+from sqlalchemy_utils   import create_database,     database_exists
 
 
 # Argc & Argv
@@ -106,8 +107,8 @@ class Threadargs:
         self._max   = top
         self._dbe   = engine
         self._tabs  = tables
-        self._paths = {}
-        while len(paths) < threads:
+        self._paths = set()
+        while len(self._paths) < threads:
             self._paths.add(gen_temp_path())
         self._paths = list(self._paths)
 
@@ -115,10 +116,10 @@ class Threadargs:
         self._count += 1
 
     def get_temp_path(self, thread_no):
-        return self._temps[thread_no]
+        return self._paths[thread_no]
 
     def get_session(self):
-        return scoped_session(sessionmaker(bind = self._engine))
+        return scoped_session(sessionmaker(bind = self._dbe))
 
     def get_tables(self):
         return self._tabs
@@ -139,6 +140,24 @@ def add_contributors(session, tables, repo):
     contribs = [u[UNAME] for u in js]
     for user in contribs:
         push_entity(session, tables, USER_ENT, user)
+
+
+def analyse_repo(session, tables, tempdir):
+    requeue = None
+    try:
+        search = pop_repo(session, tables)
+        requeue = search
+        add_contributors(session, tables, search)
+        mkdir(tempdir)
+        checkout_repo(search, tempdir)
+        paths = itemise_repo(tempdir)
+        scan_exif(session, tables, search, paths)
+        requeue = None
+        rmtree(tempdir)
+    except KeyboardInterrupt:
+        pass
+
+    return requeue
 
 
 """
@@ -236,8 +255,6 @@ def fetch_random_repo(session, tables):
     js = REQ2JSON(RAND_REPO, page)
     select = choice(js)
     repo = select[URL_ATTR]
-    # temp
-    repo = "GNUNotUsername/git-privacy-spider"
     push_entity(session, tables, REPO_ENT, repo)
 
 
@@ -389,7 +406,11 @@ paths   - list of file paths to scan
 """
 def scan_exif(session, tables, repo, paths):
     for p in paths:
-        exif = check_output([EXIFTOOL, p]).decode(UTF8)
+        try:
+            raw = check_output([EXIFTOOL, p])
+        except CalledProcessError:
+            continue
+        exif = raw.decode(UTF8)
         if GPS_ATTR in exif:
             _, _, path = p.partition(sep)
             repo_id = get_repo_id(session, tables, repo)
@@ -428,9 +449,17 @@ def serialise_results(engine, tables, path):
 
 
 def thread_scraping(thread_no, args):
-    # Unpack args
-    # call the thing that you'll end up calling down later
-    pass
+    session = args.get_session()
+    tables = args.get_tables()
+    tempdir = args.get_temp_path(thread_no)
+    while not args.is_finished():
+        requeue = analyse_repo(session, tables, tempdir)
+        if requeue is not None:
+            requeue_repo(session, tables, search)
+            break
+
+    if path.isdir(tempdir):
+        rmtree(tempdir)
 
 
 """
@@ -494,34 +523,17 @@ def main():
     else:
         # No point messing around with threadargs
         dbs = scoped_session(sessionmaker(bind = dbe))
+        requeue = None
+        tempdir = gen_temp_path()
+        for _ in range(count):
+            requeue = analyse_repo(dbs, tables, tempdir)
+            if requeue is not None:
+                requeue_repo(dbs, tables, requeue)
+                break
 
-    # Spider across all of github haphazardly
-    requeue = None
-    tempdir = gen_temp_path()
-    for _ in range(count):
-        search = None
-        try:
-            search = pop_repo(dbs, tables)
-            requeue = search
-            add_contributors(dbs, tables, search)
-            mkdir(tempdir)
-            checkout_repo(search, tempdir)
-            paths = itemise_repo(tempdir)
-            scan_exif(dbs, tables, search, paths)
-            requeue = None
+        if path.isdir(tempdir):
             rmtree(tempdir)
-        except KeyboardInterrupt:
-            break
 
-    # Clean up anything left over
-    try:
-        rmtree(tempdir)
-    except FileNotFoundError as e:
-        pass
-
-    # This current repo wasn't fully analysed -- requeue it for next time
-    if requeue is not None:
-        requeue_repo(dbs, tables, search)
 
 if __name__ == "__main__":
     main()
