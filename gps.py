@@ -142,10 +142,21 @@ def add_contributors(session, tables, repo):
         push_entity(session, tables, USER_ENT, user)
 
 
+"""
+Check a repo out into its isolated temp dir and scan everything in it
+
+session - sqla session for this thread
+tables  - collection of sqla table objects
+tempdir - path of hidden temporary directory to checkout into
+
+returns - name of repo iff interrupted mid-scan; else None
+"""
 def analyse_repo(session, tables, tempdir):
     requeue = None
     try:
         search = pop_repo(session, tables)
+        #temp
+        print(search)
         requeue = search
         add_contributors(session, tables, search)
         mkdir(tempdir)
@@ -448,6 +459,12 @@ def serialise_results(engine, tables, path):
     f.close()
 
 
+"""
+Thread wrapper to analyse_repo
+
+thread_no   - the ID of this thread
+args        - shared memory wrapper
+"""
 def thread_scraping(thread_no, args):
     session = args.get_session()
     tables = args.get_tables()
