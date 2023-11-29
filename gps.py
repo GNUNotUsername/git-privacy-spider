@@ -3,8 +3,9 @@ A web spider for analysing GPS data accidentally committed to github
 
 USAGE:  sudo python gps.py <-s path> | <[-j threads] count>
 """
-# TODO multithread this
-# TODO make schema checking idiotproof
+# TODO test the bajeesus out of multithreading
+# TODO test the bajeesus out of VPN integration
+# TODO fix duplicates in marked places
 
 
 from csv                import reader,  writer
@@ -15,7 +16,7 @@ from requests           import get
 from shutil             import rmtree
 from string             import ascii_letters as al
 from sys                import argv
-from threading          import Thread
+from threading          import Thread,  Semaphore
 
 from pathlib            import Path
 from subprocess         import CalledProcessError,  check_output,   DEVNULL,    run
@@ -57,7 +58,6 @@ BAD_TABLES  = "Tables do not match required schema; please fix in MariaDB"
 # Exif
 EXIFTOOL    = "exiftool"
 GPS_ATTR    = "GPS"
-UTF8        = "utf-8"
 
 # Exit codes
 BAD_ARGV    = 1
@@ -75,6 +75,7 @@ URL_ATTR    = "html_url"
 USER_REPOS  = (API_HEAD + "users/{0}/repos")
 
 # IO
+UTF8        = "utf-8"
 WRITE       = "w"
 
 # Logging
@@ -92,9 +93,18 @@ MIN_DELIMS  = 2
 NO_START    = 3
 URL_DELIM   = "/"
 
+# VPN
+CONNECTED   = 0
+FIND_IP     = ["nordvpn", "status"]
+IP_TAG      = "IP: "
+MOVED_IP    = "IP address moved to {0}."
+NEWLINE     = "\n"
+NO_CONNECT  = 1
+RESET_IP    = ["nordvpn", "connect", "Australia"]   # TODO remove hardcoding
+STAT_DELIM  = " "
+
 
 IS_POSINT   = lambda n      : n.isnumeric() and int(n) > 0
-REQ2JSON    = lambda f, u   : loads(get(f.format(u)).text)
 URLSTRIP    = lambda u      : URL_DELIM.join(u.split(URL_DELIM)[NO_START:])
 
 
@@ -108,12 +118,15 @@ class Threadargs:
         self._dbe   = engine
         self._tabs  = tables
         self._paths = set()
+        self._lock  = Semaphore()
         while len(self._paths) < threads:
             self._paths.add(gen_temp_path())
         self._paths = list(self._paths)
 
     def inc(self):
+        self._lock.acquire()
         self._count += 1
+        self._lock.release()
 
     def get_temp_path(self, thread_no):
         return self._paths[thread_no]
@@ -125,7 +138,17 @@ class Threadargs:
         return self._tabs
 
     def is_finished(self):
-        return self._count >= self._max
+        self._lock.acquire()
+        result = self._count >= self._max
+        self._lock.release()
+
+        return result
+
+    def lock(self):
+        self._lock.acquire()
+
+    def release(self):
+        self._lock.release()
 
 
 """
@@ -135,8 +158,8 @@ session - sqla session for this thread
 tables  - collection of sqla table objects
 repo    - url of the repo for which to enqueue the contributors of
 """
-def add_contributors(session, tables, repo):
-    js  = REQ2JSON(CONTRIBS, repo)
+def add_contributors(session, tables, repo, threadargs):
+    js  = request_json(CONTRIBS, repo, threadargs)
     contribs = [u[UNAME] for u in js]
     for user in contribs:
         push_entity(session, tables, USER_ENT, user)
@@ -151,14 +174,12 @@ tempdir - path of hidden temporary directory to checkout into
 
 returns - name of repo iff interrupted mid-scan; else None
 """
-def analyse_repo(session, tables, tempdir):
+def analyse_repo(session, tables, tempdir, threadargs):
     requeue = None
     try:
-        search = pop_repo(session, tables)
-        #temp
-        print(search)
+        search = pop_repo(session, tables, threadargs)
         requeue = search
-        add_contributors(session, tables, search)
+        add_contributors(session, tables, search, threadargs)
         mkdir(tempdir)
         checkout_repo(search, tempdir)
         paths = itemise_repo(tempdir)
@@ -247,9 +268,9 @@ session - sqla session for this thread
 tables  - collection of sqla table objects
 user    - username of user in question
 """
-def crawl_user_repos(session, tables, user):
+def crawl_user_repos(session, tables, user, threadargs):
     # TODO this could be combined with add_contributors realistically
-    js  = REQ2JSON(USER_REPOS, user)
+    js  = request_json(USER_REPOS, user, threadargs)
     repos = [r[REPNAME] for r in js]
     for repo in repos:
         push_entity(session, tables, REPO_ENT, repo)
@@ -261,11 +282,12 @@ Add a random repo to the queue
 session - sqla session for this thread
 tables  - collection of sqla table objects
 """
-def fetch_random_repo(session, tables):
+def fetch_random_repo(session, tables, threadargs):
     page = randint(0, RAND_MAX)
-    js = REQ2JSON(RAND_REPO, page)
+    js = request_json(RAND_REPO, page, threadargs)
     select = choice(js)
     repo = select[URL_ATTR]
+    repo = "GNUNotUsername/git-privacy-spider"
     push_entity(session, tables, REPO_ENT, repo)
 
 
@@ -324,6 +346,18 @@ def itemise_repo(tempdir):
     return files
 
 
+def move_ip():
+    # TODO something's wrong I can feel it
+    retcode = NO_CONNECT
+    while retcode != CONNECTED:
+        retcode = run(RESET_IP, stdout = DEVNULL).returncode
+
+    status = check_output(FIND_IP).decode(UTF8).split(NEWLINE)
+    ip = list(filter(lambda l : l.startswith(IP_TAG), status))[0]
+    _, _, addr = ip.partition(STAT_DELIM)
+    print(MOVED_IP.format(addr))
+
+
 """
 Remove the first entity from a queue table
 
@@ -357,14 +391,15 @@ tables  - collection of sqla table objects
 
 returns - the shortened URL of the repo popped
 """
-def pop_repo(session, tables):
+def pop_repo(session, tables, threadargs):
     repo = pop_entity(session, tables, REPO_ENT)
+    print(repo)
     while repo is None:
         user = pop_entity(session, tables, USER_ENT)
         if user is None:
-            fetch_random_repo(session, tables)
+            fetch_random_repo(session, tables, threadargs)
         else:
-            crawl_user_repos(session, tables, user)
+            crawl_user_repos(session, tables, user, threadargs)
         repo = pop_entity(session, tables, REPO_ENT)
 
     return repo
@@ -391,6 +426,21 @@ def push_entity(session, tables, tabkey, url):
         link = {tabkey: fkey}
         session.execute(insert(queue).values(link))
         session.commit()
+
+
+def request_json(fmt, param, threadargs):
+    if threadargs is not None:
+        threadargs.lock()
+    body = fmt.format(param)
+    resp = get(body)
+    while not resp.ok:
+        move_ip()
+        resp = get(body)
+    if threadargs is not None:
+        threadargs.release()
+    json = loads(resp.text)
+
+    return json
 
 
 """
@@ -470,7 +520,7 @@ def thread_scraping(thread_no, args):
     tables = args.get_tables()
     tempdir = args.get_temp_path(thread_no)
     while not args.is_finished():
-        requeue = analyse_repo(session, tables, tempdir)
+        requeue = analyse_repo(session, tables, tempdir, args)
         if requeue is not None:
             requeue_repo(session, tables, search)
             break
@@ -517,6 +567,7 @@ def validate(argv):
 
 
 def main():
+    print("Starting")
     # Validate argv
     verdict, count, threads = validate(argv)
     if not verdict:
@@ -528,6 +579,7 @@ def main():
     if threads == 0:
         serialise_results(dbe, tables, argv[PATH_IND])
     elif threads > 1:
+        move_ip()
         running = []
         args = Threadargs(count, threads, dbe, tables)
         for t in range(threads):
@@ -539,11 +591,12 @@ def main():
             t.join()
     else:
         # No point messing around with threadargs
+        move_ip()
         dbs = scoped_session(sessionmaker(bind = dbe))
         requeue = None
         tempdir = gen_temp_path()
         for _ in range(count):
-            requeue = analyse_repo(dbs, tables, tempdir)
+            requeue = analyse_repo(dbs, tables, tempdir, None)
             if requeue is not None:
                 requeue_repo(dbs, tables, requeue)
                 break
