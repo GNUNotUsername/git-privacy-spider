@@ -1,7 +1,7 @@
 """
 A web spider for analysing GPS data accidentally committed to github
 
-USAGE:  sudo python gps.py <-s path> | <[-j threads] count>
+USAGE:  sudo python gps.py <-s path> | count
 """
 # TODO multithread this
 # TODO make schema checking idiotproof
@@ -26,11 +26,9 @@ from sqlalchemy_utils   import create_database, database_exists
 # Argc & Argv
 COUNT       = -1
 FLAG        = 1
-GOOD_ARGCS  = range(2, 5)
+GOOD_ARGCS  = {2, 3}
 PATH_IND    = 2
 SERIAL_FLAG = "-s"
-THREAD_FLAG = "-j"
-THREADS     = 2
 
 # CSV
 CSV_HEADER  = ["Repo", "Path"]
@@ -95,32 +93,6 @@ URL_DELIM   = "/"
 IS_POSINT   = lambda n      : n.isnumeric() and int(n) > 0
 REQ2JSON    = lambda f, u   : loads(get(f.format(u)).text)
 URLSTRIP    = lambda u      : URL_DELIM.join(u.split(URL_DELIM)[NO_START:])
-
-
-"""
-Wrapper for shared memory between threads
-"""
-class Threadargs:
-    def __init__(self, top, threads, engine, tables):
-        self._count = 0
-        self._max   = top
-        self._dbe   = engine
-        self._tabs  = tables
-
-    def inc(self):
-        self._count += 1
-
-    def get_temp_path(self, thread_no):
-        return self._temps[thread_no]
-
-    def get_engine(self):
-        return self._engine
-
-    def get_tables(self):
-        return self._tabs
-
-    def is_finished(self):
-        return self._count >= self._max
 
 
 """
@@ -433,7 +405,6 @@ returns - true iff valid ; no. repos to examine ; no. threads to use
 def validate(argv):
     verdict = False
     count = 0
-    threads = 0
     argc = len(argv)
 
     if argc in GOOD_ARGCS:
@@ -441,28 +412,22 @@ def validate(argv):
         flag = argv[FLAG]
         match argc:
             case 2:
-                threads = 1
                 verdict = IS_POSINT(count)
             case 3:
                 verdict = (flag == SERIAL_FLAG)
-                threads = count = 0
-            case 4:
-                threads = argv[THREADS]
-                verdict = (flag == THREAD_FLAG) and IS_POSINT(count) \
-                        and IS_POSINT(threads)
+                count = 0
             case _:
                 verdict = False
 
         if verdict:
             count = int(count)
-            threads = int(threads)
 
-    return verdict, count, threads
+    return verdict, count
 
 
 def main():
     # Validate argv
-    verdict, count, threads = validate(argv)
+    verdict, count = validate(argv)
     if not verdict:
         exit(BAD_ARGV)
 
@@ -470,7 +435,7 @@ def main():
     dbe, tables = connect_db()
     dbs = scoped_session(sessionmaker(bind = dbe))
 
-    if threads == 0:
+    if not count:
         serialise_results(dbs, tables, argv[PATH_IND])
 
     # Spider across all of github haphazardly
