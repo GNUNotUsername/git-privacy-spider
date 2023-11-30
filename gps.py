@@ -3,7 +3,6 @@ A web spider for analysing GPS data accidentally committed to github
 
 USAGE:  sudo python gps.py <-s path> | count
 """
-# TODO multithread this
 # TODO make schema checking idiotproof
 
 
@@ -17,10 +16,10 @@ from string             import ascii_letters as al
 from sys                import argv
 
 from pathlib            import Path
-from subprocess         import check_output,    DEVNULL,        run
-from sqlalchemy         import Column,          create_engine,  delete, ForeignKey, Integer, insert, MetaData, select, String, Table
-from sqlalchemy.orm     import scoped_session,  sessionmaker
-from sqlalchemy_utils   import create_database, database_exists
+from subprocess         import CalledProcessError,  check_output,   DEVNULL,    run
+from sqlalchemy         import Column,              create_engine,  delete,     ForeignKey, Integer, insert, MetaData, select, String, Table
+from sqlalchemy.orm     import scoped_session,      sessionmaker
+from sqlalchemy_utils   import create_database,     database_exists
 
 
 # Argc & Argv
@@ -52,8 +51,9 @@ USER_ENT    = "user"
 BAD_TABLES  = "Tables do not match required schema; please fix in MariaDB"
 
 # Exif
+DEG_MARKER  = " deg "
 EXIFTOOL    = "exiftool"
-GPS_ATTR    = "GPS"
+GPS_ATTR    = "GPS "
 UTF8        = "utf-8"
 
 # Exit codes
@@ -89,21 +89,30 @@ MIN_DELIMS  = 2
 NO_START    = 3
 URL_DELIM   = "/"
 
+# VPN
+CONNECTED   = 0
+FIND_IP     = ["nordvpn", "status"]
+IP_TAG      = "IP: "
+MOVED_IP    = "IP address moved to {0}."
+NEWLINE     = "\n"
+NO_CONNECT  = 1
+RESET_IP    = ["nordvpn", "connect"]
+STAT_DELIM  = " "
+
 
 IS_POSINT   = lambda n      : n.isnumeric() and int(n) > 0
-REQ2JSON    = lambda f, u   : loads(get(f.format(u)).text)
 URLSTRIP    = lambda u      : URL_DELIM.join(u.split(URL_DELIM)[NO_START:])
 
 
 """
 Push unseen contributors for a repo into the user queue
 
-session - sqla session for this thread
+session - sqla session
 tables  - collection of sqla table objects
 repo    - url of the repo for which to enqueue the contributors of
 """
 def add_contributors(session, tables, repo):
-    js  = REQ2JSON(CONTRIBS, repo)
+    js  = request_json(CONTRIBS, repo)
     contribs = [u[UNAME] for u in js]
     for user in contribs:
         push_entity(session, tables, USER_ENT, user)
@@ -181,13 +190,13 @@ def connect_db():
 """
 Enqueue every (<=30) repo a user has contributed to
 
-session - sqla session for this thread
+session - sqla session
 tables  - collection of sqla table objects
 user    - username of user in question
 """
 def crawl_user_repos(session, tables, user):
     # TODO this could be combined with add_contributors realistically
-    js  = REQ2JSON(USER_REPOS, user)
+    js  = request_json(USER_REPOS, user)
     repos = [r[REPNAME] for r in js]
     for repo in repos:
         push_entity(session, tables, REPO_ENT, repo)
@@ -196,16 +205,14 @@ def crawl_user_repos(session, tables, user):
 """
 Add a random repo to the queue
 
-session - sqla session for this thread
+session - sqla session
 tables  - collection of sqla table objects
 """
 def fetch_random_repo(session, tables):
     page = randint(0, RAND_MAX)
-    js = REQ2JSON(RAND_REPO, page)
+    js = request_json(RAND_REPO, page)
     select = choice(js)
     repo = select[URL_ATTR]
-    # temp
-    repo = "GNUNotUsername/git-privacy-spider"
     push_entity(session, tables, REPO_ENT, repo)
 
 
@@ -227,7 +234,7 @@ def gen_temp_path():
 """
 Add a random repo to the queue
 
-session - sqla session for this thread
+session - sqla session
 tables  - collection of sqla table objects
 repo    - repo to look up
 
@@ -264,10 +271,21 @@ def itemise_repo(tempdir):
     return files
 
 
+def move_ip():
+    retcode = NO_CONNECT
+    while retcode != CONNECTED:
+        retcode = run(RESET_IP, stdout = DEVNULL).returncode
+
+    status = check_output(FIND_IP).decode(UTF8).split(NEWLINE)
+    ip = list(filter(lambda l : l.startswith(IP_TAG), status))[0]
+    _, _, addr = ip.partition(STAT_DELIM)
+    print(MOVED_IP.format(addr))
+
+
 """
 Remove the first entity from a queue table
 
-session - sqla session for this thread
+session - sqla session
 tables  - collection of sqla table objects
 tabkey  - the relevant table to pop from
 
@@ -292,7 +310,7 @@ def pop_entity(session, tables, tabkey):
 """
 Pop a repo from the repo queue and repopulate if necessary
 
-session - sqla session for this thread
+session - sqla session
 tables  - collection of sqla table objects
 
 returns - the shortened URL of the repo popped
@@ -313,7 +331,7 @@ def pop_repo(session, tables):
 """
 Push a user or repo to its respective queue
 
-session - sqla session for this thread
+session - sqla session
 tables  - collection of sqla table objects
 tabkey  - the relevant table to push to
 url     - the (maybe shortened) URL of the entity to push
@@ -333,10 +351,21 @@ def push_entity(session, tables, tabkey, url):
         session.commit()
 
 
+def request_json(fmt, param):
+    body = fmt.format(param)
+    resp = get(body)
+    while not resp.ok:
+        move_ip()
+        resp = get(body)
+    json = loads(resp.text)
+
+    return json
+
+
 """
 Requeue an already seen repo
 
-session - sqla session for this thread
+session - sqla session
 tables  - collection of sqla table objects
 repo    - name of repo to requeue
 """
@@ -350,15 +379,19 @@ def requeue_repo(session, tables, repo):
 """
 Scan every file in a list of paths for GPS exif data
 
-session - sqla session for this thread
+session - sqla session
 tables  - collection of sqla table objects
 repo    - the repo these files belongs to
 paths   - list of file paths to scan
 """
 def scan_exif(session, tables, repo, paths):
     for p in paths:
-        exif = check_output([EXIFTOOL, p]).decode(UTF8)
-        if GPS_ATTR in exif:
+        try:
+            raw = check_output([EXIFTOOL, p])
+        except CalledProcessError:
+            continue
+        exif = raw.decode(UTF8)
+        if GPS_ATTR in exif and DEG_MARKER in exif:
             _, _, path = p.partition(sep)
             repo_id = get_repo_id(session, tables, repo)
             record = {REPO_ENT: repo_id, PATH: path}
@@ -370,7 +403,7 @@ def scan_exif(session, tables, repo, paths):
 """
 Append the contents of the hits table to a csv file
 
-session - sqla session for this thread
+session - sqla session
 tables  - collection of sqla table objects
 path    - path to the file to append to
 """
@@ -400,7 +433,7 @@ Ensure that the given arg vector is valid
 
 argv    - the arg vector to validate
 
-returns - true iff valid ; no. repos to examine ; no. threads to use
+returns - true iff valid ; no. repos to examine
 """
 def validate(argv):
     verdict = False
