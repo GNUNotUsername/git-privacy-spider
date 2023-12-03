@@ -20,4 +20,5 @@ where ```<path>``` is the path to the CSV to export.
 * MariaDB
 * SQLAlchemy
 * SQLAlchemy-Utils
+
 TBC I can't remember the rest, I might update this soonish.
