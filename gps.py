@@ -272,6 +272,9 @@ def itemise_repo(tempdir):
     return files
 
 
+"""
+Change the machine's IP by rerolling the VPN connection
+"""
 def move_ip():
     retcode = NO_CONNECT
     while retcode != CONNECTED:
@@ -351,6 +354,14 @@ def push_entity(session, tables, tabkey, url):
         session.commit()
 
 
+"""
+Send a request to the github API, resolving rate limiting with VPN trickery
+
+fmt     - format constant of the request body
+param   - parameter to insert into the request body
+
+returns - github API response in JSON format
+"""
 def request_json(fmt, param):
     body = fmt.format(param)
     resp = get(body)
