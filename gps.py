@@ -3,7 +3,6 @@ A web spider for analysing GPS data accidentally committed to github
 
 USAGE:  sudo python gps.py <-s path> | count
 """
-# TODO make schema checking idiotproof
 
 
 from csv                import reader,  writer
@@ -17,7 +16,7 @@ from sys                import argv
 
 from pathlib            import Path
 from subprocess         import CalledProcessError,  check_output,   DEVNULL,    run
-from sqlalchemy         import Column,              create_engine,  delete,     ForeignKey, Integer, insert, MetaData, select, String, Table
+from sqlalchemy         import Column,              create_engine,  delete,     ForeignKey, Integer, insert, MetaData, select, String, Table, UniqueConstraint
 from sqlalchemy.orm     import scoped_session,      sessionmaker
 from sqlalchemy_utils   import create_database,     database_exists
 
@@ -45,6 +44,7 @@ PATH        = "path"
 QUEUE_EXT   = "_queue"
 REPO_ENT    = "repo"
 TOP         = 1
+UNIQUE_HIT  = "unique_repo_path_hit"
 USER_ENT    = "user"
 
 # Error Messages
@@ -76,6 +76,7 @@ WRITE       = "w"
 
 # Logging
 BAD_CLONE   = "Repo {0} could not be cloned"
+EXAMINING   = "Examining {0}."
 
 # Pathing
 ALL         = "*"
@@ -150,12 +151,12 @@ def connect_db():
         users = Table(
             USER_ENT, md,
             Column(ID,          Integer, primary_key = True),
-            Column(BASE_NAME,   String(LINK_LEN))
+            Column(BASE_NAME,   String(LINK_LEN), unique = True)
         )
         repos = Table(
             REPO_ENT, md,
             Column(ID,          Integer, primary_key = True),
-            Column(BASE_NAME,   String(LINK_LEN))
+            Column(BASE_NAME,   String(LINK_LEN), unique = True)
         )
         user_queue = Table(
             USER_ENT + QUEUE_EXT, md,
@@ -171,7 +172,8 @@ def connect_db():
             HITS, md,
             Column(ID,          Integer, primary_key = True),
             Column(REPO_ENT,    Integer, ForeignKey(REPO_ENT + IDEXT)),
-            Column(PATH, String(LINK_LEN))
+            Column(PATH, String(LINK_LEN)),
+            UniqueConstraint(ID, REPO_ENT, name = UNIQUE_HIT)
         )
         md.create_all(engine)
     else:
@@ -195,7 +197,6 @@ tables  - collection of sqla table objects
 user    - username of user in question
 """
 def crawl_user_repos(session, tables, user):
-    # TODO this could be combined with add_contributors realistically
     js  = request_json(USER_REPOS, user)
     repos = [r[REPNAME] for r in js]
     for repo in repos:
@@ -337,7 +338,6 @@ tabkey  - the relevant table to push to
 url     - the (maybe shortened) URL of the entity to push
 """
 def push_entity(session, tables, tabkey, url):
-    # TODO rethink -- pass the exact table now that others scrapped?
     base_ent, queue = tables[tabkey], tables[tabkey + QUEUE_EXT]
     cut = url if url.count(URL_DELIM) < MIN_DELIMS else URLSTRIP(url)
     query = select(base_ent).where(base_ent.c.name == cut)
@@ -478,6 +478,7 @@ def main():
         search = None
         try:
             search = pop_repo(dbs, tables)
+            print(EXAMINING.format(search))
             requeue = search
             add_contributors(dbs, tables, search)
             mkdir(tempdir)
