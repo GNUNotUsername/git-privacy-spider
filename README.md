@@ -8,11 +8,15 @@ This is a spider which crawls all across public repos and scans for GPS metadata
 
 # Usage
 To initiate a crawling session:
+
 ```sudo python gps.py <count>```
+
 where ```<count>``` is the number of repos to examine in this session.
 
 To export the current results into a CSV:
+
 ```sudo python gps.py <path>```
+
 where ```<path>``` is the path to the CSV to export.
 
 # Dependencies:
