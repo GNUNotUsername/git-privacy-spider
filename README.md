@@ -23,8 +23,9 @@ where ```<path>``` is the path to the CSV to export.
 
 # Dependencies:
 * Python >3.10
-* MariaDB
-* SQLAlchemy
+* MariaDB >= 11.2
+* SQLAlchemy >=1.4
 * SQLAlchemy-Utils
-
-TBC I can't remember the rest, I might update this soonish.
+* python-mysqlclient
+* python-requests >=2.1
+* perl-image-exiftool >=12.70
